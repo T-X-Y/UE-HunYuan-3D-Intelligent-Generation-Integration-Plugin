@@ -1,0 +1,19 @@
+echo "# Compiled files" > .gitignore
+echo "Intermediate/" >> .gitignore
+echo "Binaries/" >> .gitignore
+echo "DerivedDataCache/" >> .gitignore
+echo "" >> .gitignore
+echo "# IDE" >> .gitignore
+echo ".vs/" >> .gitignore
+echo ".vscode/" >> .gitignore
+echo ".idea/" >> .gitignore
+echo "" >> .gitignore
+echo "# Local config" >> .gitignore
+echo "*.ini" >> .gitignore
+echo "*.log" >> .gitignore
+echo "*.key" >> .gitignore
+echo ".env" >> .gitignore
+echo "" >> .gitignore
+echo "# Python" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pyc" >> .gitignore
