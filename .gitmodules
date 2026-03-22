@@ -1,4 +1,0 @@
-[submodule "UE_RAG_SDK"]
-	path = UE_RAG_SDK
-	url = https://github.com/T-X-Y/UE-HunYuan-3D-Intelligent-Generation-Integration-Plugin
-	branch = develop
