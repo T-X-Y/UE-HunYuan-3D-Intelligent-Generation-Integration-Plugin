@@ -1,0 +1,28 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\private\\download\\modeldownloader.cpp",
+        "ProvidedModule": "",
+        "PCH": "d:\\unreal projects\\hunyuantest\\intermediate\\build\\win64\\x64\\hunyuantesteditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.h.pch",
+        "Includes": [
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\hunyuanai\\definitions.hunyuanai.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\download\\modeldownloader.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\httpmodule.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\interfaces\\ihttprequest.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\interfaces\\ihttpbase.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\interfaces\\ihttpresponse.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\interfaces\\ihttpresponsecodes.inl",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\online\\http\\public\\interfaces\\ihttpresponsecodes.inl",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\download\\downloadtypes.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\download\\idownloadhandler.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\ui\\modelinfowidget.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\hunyuanai.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\api\\hunyuanapi.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\api\\hunyuanapitypes.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\api\\hunyuanmodels.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\logging\\hunyuanlogging.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

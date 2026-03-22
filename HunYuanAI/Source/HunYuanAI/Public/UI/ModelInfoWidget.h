@@ -33,7 +33,21 @@ struct FModelInfo
     // 检查文件是否存在
     bool IsFileExists() const
     {
-        return !FilePath.IsEmpty() && FPaths::FileExists(FilePath);
+        if (FilePath.IsEmpty()) return false;
+
+        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+
+        // 检查是文件还是文件夹
+        if (PlatformFile.FileExists(*FilePath))
+        {
+            return true;  // 是文件
+        }
+        else if (PlatformFile.DirectoryExists(*FilePath))
+        {
+            return true;  // 是文件夹（解压后的目录）
+        }
+
+        return false;
     }
 };
 

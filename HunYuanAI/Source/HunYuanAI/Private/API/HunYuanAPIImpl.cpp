@@ -1,4 +1,6 @@
-﻿#include "API/HunYuanAPIImpl.h"
+﻿// API/HunYuanAPIImpl.cpp
+
+#include "API/HunYuanAPIImpl.h"
 #include "Logging/HunYuanLogging.h"
 #include "Async/Async.h"
 
@@ -22,6 +24,8 @@ public:
         , Params(InParams)
     {
     }
+
+    ~FHunYuanRequest() {}
 
     virtual std::string ToJsonString() const override
     {
@@ -48,6 +52,8 @@ public:
         : Result(MakeShareable(new FJsonObject()))
     {
     }
+
+    ~FHunYuanResponse() {}
 
     TencentCloud::CoreInternalOutcome Deserialize(const std::string& payload)
     {
@@ -104,14 +110,15 @@ private:
 FHunYuanAPIImpl::FHunYuanAPIImpl()
     : bRunning(false)
     , bIsValid(false)
+    , bNeedsClientRecreation(false)
     , WorkerThread(nullptr)
     , Client(nullptr)
     , CredentialPtr(nullptr)
     , HttpProfilePtr(nullptr)
     , ClientProfilePtr(nullptr)
+    ,Service("ai3d")
+    ,Version("2025-05-13")
 {
-    Service = "ai3d";
-    Version = "2025-05-13";
     TencentCloud::InitAPI();
 }
 
@@ -119,10 +126,17 @@ FHunYuanAPIImpl::~FHunYuanAPIImpl()
 {
     UE_LOG(LogHunYuanAPI, Log, TEXT("FHunYuanAPIImpl destructor started"));
 
-    // 标记线程停止
-    Stop();
+    // 1. 先停止接受新请求
+    bRunning = false;
 
-    // 等待线程结束
+    // 2. 清空队列，避免线程还在处理
+    FAPIRequest Request;
+    while (RequestQueue.Dequeue(Request)) {}
+
+    FAPIResponse Response;
+    while (ResponseQueue.Dequeue(Response)) {}
+
+    // 3. 等待线程结束
     if (WorkerThread)
     {
         WorkerThread->WaitForCompletion();
@@ -130,17 +144,36 @@ FHunYuanAPIImpl::~FHunYuanAPIImpl()
         WorkerThread = nullptr;
     }
 
-    // 清理客户端
+    // 3. 等待线程结束
+    if (WorkerThread)
     {
-        FScopeLock Lock(&ClientCriticalSection);
-        Client.Reset();
+        WorkerThread->WaitForCompletion();
+        delete WorkerThread;
+        WorkerThread = nullptr;
     }
 
-    // ===== 清理成员变量（TSharedPtr 会自动处理，但显式 Reset 更清晰）=====
-    CredentialPtr.Reset();
-    HttpProfilePtr.Reset();
-    ClientProfilePtr.Reset();
+    // 4. 先清理 Client（重要：在 ShutdownAPI 之前）
+    {
+        FScopeLock Lock(&ClientCriticalSection);
 
+        // 先重置 Client，这会触发 lambda 删除器
+        // 删除器会删除 RawClient，但不会立即释放 libcurl 资源
+        if (Client.IsValid())
+        {
+            // 获取原始指针，准备手动清理
+            TencentCloud::CommonClient* RawClient = Client.Get();
+            Client.Reset();  // 先 Reset，让 lambda 删除器执行
+        }
+
+        // 再重置依赖对象
+        CredentialPtr.Reset();
+        HttpProfilePtr.Reset();
+        ClientProfilePtr.Reset();
+    }
+    // 5. 给 libcurl 一些时间完成清理
+    FPlatformProcess::Sleep(0.1f);
+
+    // 6. 最后关闭 SDK
     TencentCloud::ShutdownAPI();
 
     UE_LOG(LogHunYuanAPI, Log, TEXT("FHunYuanAPIImpl destructor completed"));
@@ -154,13 +187,8 @@ void FHunYuanAPIImpl::SetCredentials(const FString& InSecretId, const FString& I
     SecretKey = InSecretKey;
     Region = InRegion.IsEmpty() ? TEXT("ap-guangzhou") : InRegion;
 
-    // 重置客户端，下次请求时会重新创建
-    Client.Reset();
-
-    // ===== 同时也重置 SDK 对象 =====
-    CredentialPtr.Reset();
-    HttpProfilePtr.Reset();
-    ClientProfilePtr.Reset();
+    // 改为标记客户端为"脏"，下次请求时重新创建
+    bNeedsClientRecreation = true;
 
     bIsValid = true;
 
@@ -242,6 +270,11 @@ void FHunYuanAPIImpl::Tick()
     // 确保在游戏线程调用
     if (!IsInGameThread())
     {
+        // 如果在非游戏线程，调度到游戏线程
+        AsyncTask(ENamedThreads::GameThread, [this]()
+            {
+                Tick();
+            });
         UE_LOG(LogHunYuanAI, Warning, TEXT("Tick called from non-game thread"));
         return;
     }
@@ -298,9 +331,33 @@ bool FHunYuanAPIImpl::ExecuteRequest(const FAPIRequest& Request, TSharedPtr<FJso
 {
     UE_LOG(LogHunYuanAI, Log, TEXT("[%s] ExecuteRequest started"), *Request.RequestId);
 
+    // 检查委托是否绑定
+    if (!Request.Callback.IsBound())
+    {
+        UE_LOG(LogHunYuanAI, Warning, TEXT("[%s] Callback not bound"), *Request.RequestId);
+        OutResult = MakeShareable(new FJsonObject());
+        OutResult->SetStringField(TEXT("ErrorCode"), TEXT("CallbackNotBound"));
+        OutResult->SetStringField(TEXT("ErrorMessage"), TEXT("Callback is not bound"));
+        return false;
+    }
+
+    // ===== 检查是否需要重建客户端 =====
+    {
+        FScopeLock Lock(&ClientCriticalSection);
+        if (bNeedsClientRecreation)
+        {
+            UE_LOG(LogHunYuanAI, Log, TEXT("[%s] Client needs recreation due to credential change"), *Request.RequestId);
+            Client.Reset();
+            bNeedsClientRecreation = false;
+        }
+    }
+
     if (!CreateClient())
     {
         UE_LOG(LogHunYuanAI, Error, TEXT("[%s] Failed to create API client"), *Request.RequestId);
+        OutResult = MakeShareable(new FJsonObject());
+        OutResult->SetStringField(TEXT("ErrorCode"), TEXT("ClientCreationFailed"));
+        OutResult->SetStringField(TEXT("ErrorMessage"), TEXT("Failed to create API client"));
         return false;
     }
 
@@ -315,6 +372,9 @@ bool FHunYuanAPIImpl::ExecuteRequest(const FAPIRequest& Request, TSharedPtr<FJso
     if (!ClientCopy.IsValid())
     {
         UE_LOG(LogHunYuanAI, Error, TEXT("[%s] API client is invalid"), *Request.RequestId);
+        OutResult = MakeShareable(new FJsonObject());
+        OutResult->SetStringField(TEXT("ErrorCode"), TEXT("InvalidClient"));
+        OutResult->SetStringField(TEXT("ErrorMessage"), TEXT("API client is invalid"));
         return false;
     }
 
@@ -352,6 +412,9 @@ bool FHunYuanAPIImpl::ExecuteRequest(const FAPIRequest& Request, TSharedPtr<FJso
             else
             {
                 UE_LOG(LogHunYuanAI, Error, TEXT("[%s] Failed to deserialize response"), *Request.RequestId);
+                OutResult = MakeShareable(new FJsonObject());
+                OutResult->SetStringField(TEXT("ErrorCode"), TEXT("DeserializeFailed"));
+                OutResult->SetStringField(TEXT("ErrorMessage"), TEXT("Failed to deserialize response"));
             }
         }
         else
@@ -359,16 +422,28 @@ bool FHunYuanAPIImpl::ExecuteRequest(const FAPIRequest& Request, TSharedPtr<FJso
             Core::Error error = httpOutcome.GetError();
             UE_LOG(LogHunYuanAI, Error, TEXT("[%s] Request failed: %s"),
                 *Request.RequestId, UTF8_TO_TCHAR(error.GetErrorMessage().c_str()));
+
+            OutResult = MakeShareable(new FJsonObject());
+            OutResult->SetStringField(TEXT("ErrorCode"), UTF8_TO_TCHAR(error.GetErrorCode().c_str()));
+            OutResult->SetStringField(TEXT("ErrorMessage"), UTF8_TO_TCHAR(error.GetErrorMessage().c_str()));
         }
     }
     catch (const std::exception& e)
     {
         UE_LOG(LogHunYuanAI, Error, TEXT("[%s] Exception in API request: %s"),
             *Request.RequestId, UTF8_TO_TCHAR(e.what()));
+
+        OutResult = MakeShareable(new FJsonObject());
+        OutResult->SetStringField(TEXT("ErrorCode"), TEXT("Exception"));
+        OutResult->SetStringField(TEXT("ErrorMessage"), UTF8_TO_TCHAR(e.what()));
     }
     catch (...)
     {
         UE_LOG(LogHunYuanAI, Error, TEXT("[%s] Unknown exception in API request"), *Request.RequestId);
+
+        OutResult = MakeShareable(new FJsonObject());
+        OutResult->SetStringField(TEXT("ErrorCode"), TEXT("UnknownException"));
+        OutResult->SetStringField(TEXT("ErrorMessage"), TEXT("Unknown exception occurred"));
     }
 
     return false;
@@ -398,28 +473,42 @@ bool FHunYuanAPIImpl::CreateClient()
         std::string AnsiVersion = Version;
         std::string Endpoint = AnsiService + ".tencentcloudapi.com";
 
-        // ===== 使用 UE 的 MakeShareable，并修正命名空间 =====
-        CredentialPtr = MakeShareable(new TencentCloud::Credential(AnsiSecretId, AnsiSecretKey));
+        // 使用 TSharedPtr 管理所有对象
+        TSharedPtr<TencentCloud::Credential> Credential = MakeShared<TencentCloud::Credential>(AnsiSecretId, AnsiSecretKey);
+        TSharedPtr<TencentCloud::HttpProfile> HttpProfile = MakeShared<TencentCloud::HttpProfile>();
+        HttpProfile->SetEndpoint(Endpoint);
+        HttpProfile->SetReqTimeout(30);
+        HttpProfile->SetConnectTimeout(30);
 
-        // 注意：去掉 Profile::，直接在 TencentCloud 命名空间下
-        HttpProfilePtr = MakeShareable(new TencentCloud::HttpProfile());
-        HttpProfilePtr->SetEndpoint(Endpoint);
-        HttpProfilePtr->SetReqTimeout(30);
-        HttpProfilePtr->SetConnectTimeout(30);
+        TSharedPtr<TencentCloud::ClientProfile> ClientProfile = MakeShared<TencentCloud::ClientProfile>(*HttpProfile);
 
-        // 注意：去掉 Profile::，直接在 TencentCloud 命名空间下
-        ClientProfilePtr = MakeShareable(new TencentCloud::ClientProfile(*HttpProfilePtr));
-
-        // 创建 CommonClient
+        // 创建 CommonClient - 直接使用值传递，不需要指针
         TencentCloud::CommonClient* RawClient = new TencentCloud::CommonClient(
             AnsiService,
             AnsiVersion,
-            *CredentialPtr,
+            *Credential.Get(),  // 解引用 TSharedPtr
             AnsiRegion,
-            *ClientProfilePtr
+            *ClientProfile.Get()
         );
 
-        Client = MakeShareable(RawClient);
+        // 将所有依赖对象都捕获到 lambda 中，确保它们和 Client 一起存活
+        Client = TSharedPtr<TencentCloud::CommonClient>(
+            RawClient,
+            [Credential, HttpProfile, ClientProfile](TencentCloud::CommonClient* Ptr)
+            {
+                if (Ptr)
+                {
+                    UE_LOG(LogHunYuanAPI, Log, TEXT("Deleting CommonClient..."));
+
+                    // 注意：这里不要立即删除，让 SDK 内部管理
+                    // 直接 delete 可能会导致问题
+                    delete Ptr;
+
+                    UE_LOG(LogHunYuanAPI, Log, TEXT("CommonClient deleted"));
+                }
+                // Credential, HttpProfile, ClientProfile 会自动释放
+            }
+        );
 
         UE_LOG(LogHunYuanAPI, Log, TEXT("API client created successfully"));
         return true;
@@ -427,12 +516,7 @@ bool FHunYuanAPIImpl::CreateClient()
     catch (const std::exception& e)
     {
         UE_LOG(LogHunYuanAPI, Error, TEXT("Failed to create client: %s"), UTF8_TO_TCHAR(e.what()));
-
-        // UE的TSharedPtr用Reset()
-        CredentialPtr.Reset();
-        HttpProfilePtr.Reset();
-        ClientProfilePtr.Reset();
-
+        Client.Reset();
         return false;
     }
 }

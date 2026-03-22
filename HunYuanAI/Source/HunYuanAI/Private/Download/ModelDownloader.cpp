@@ -1,27 +1,39 @@
 ﻿#include "Download/ModelDownloader.h"
-#include "Download/ModelURLParser.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "HunYuanAI.h"
 #include "Logging/HunYuanLogging.h"
 
 FModelDownloader::FModelDownloader()
     : ActiveDownloads(0)
 {
+    UE_LOG(LogHunYuanDownload, Log, TEXT("FModelDownloader created"));
 }
 
 FModelDownloader::~FModelDownloader()
 {
     CancelAllDownloads();
+    UE_LOG(LogHunYuanDownload, Log, TEXT("FModelDownloader destroyed"));
 }
 
-bool FModelDownloader::AddDownload(const FString& URL, const FString& JobId, const FString& DownloadDir,
+bool FModelDownloader::AddDownload(
+    const FString& URL,
+    const FString& JobId,
+    const FString& DownloadDir,
+    TSharedPtr<IDownloadHandler> Handler,
     FOnDownloadItemComplete OnComplete)
 {
     // 检查URL有效性
     if (URL.IsEmpty() || !URL.StartsWith(TEXT("http")))
     {
-        UE_LOG(LogHunYuanDownload, Error, TEXT("Invalid URL: %s"), *URL);
+        UE_LOG(LogHunYuanDownload, Error, TEXT("AddDownload: Invalid URL - %s"), *URL);
+        return false;
+    }
+
+    if (!Handler.IsValid())
+    {
+        UE_LOG(LogHunYuanDownload, Error, TEXT("AddDownload: Invalid Handler for URL - %s"), *URL);
         return false;
     }
 
@@ -48,6 +60,7 @@ bool FModelDownloader::AddDownload(const FString& URL, const FString& JobId, con
     Task->DestinationPath = DestinationPath;
     Task->Item = Item;
     Task->Request = Request;
+    Task->Handler = Handler;
     Task->Callback = OnComplete;
     Task->StartTime = FPlatformTime::Seconds();
     Task->LastTime = Task->StartTime;
@@ -63,7 +76,8 @@ bool FModelDownloader::AddDownload(const FString& URL, const FString& JobId, con
 
     ActiveDownloads++;
 
-    UE_LOG(LogHunYuanDownload, Log, TEXT("Download started: %s -> %s"), *URL, *DestinationPath);
+    UE_LOG(LogHunYuanDownload, Log, TEXT("AddDownload: Started - %s -> %s [Handler: %s]"),
+        *URL, *DestinationPath, *Handler->GetFormatName());
 
     // 启动请求
     return Request->ProcessRequest();
@@ -86,9 +100,8 @@ void FModelDownloader::CancelDownload(const FString& JobId)
         ActiveTasks.Remove(JobId);
         ActiveDownloads--;
 
-        UE_LOG(LogHunYuanDownload, Log, TEXT("Download cancelled: %s"), *JobId);
+        UE_LOG(LogHunYuanDownload, Log, TEXT("CancelDownload: %s"), *JobId);
 
-        // 回调
         AsyncTask(ENamedThreads::GameThread, [Callback = Task->Callback, Item = Task->Item]()
             {
                 Callback.ExecuteIfBound(*Item);
@@ -119,7 +132,7 @@ void FModelDownloader::CancelAllDownloads()
     ActiveTasks.Empty();
     ActiveDownloads = 0;
 
-    UE_LOG(LogHunYuanDownload, Log, TEXT("All downloads cancelled"));
+    UE_LOG(LogHunYuanDownload, Log, TEXT("CancelAllDownloads: All downloads cancelled"));
 }
 
 TSharedPtr<Download::FDownloadItem> FModelDownloader::GetDownloadItem(const FString& JobId) const
@@ -216,7 +229,7 @@ void FModelDownloader::UpdateTaskProgress(const FString& JobId, int64 BytesRecei
 
         Item->Status = Download::EDownloadStatus::Downloading;
 
-        // 触发进度事件（在游戏线程）
+        // 触发进度事件
         AsyncTask(ENamedThreads::GameThread, [WeakThis = TWeakPtr<FModelDownloader>(AsShared()), Item]()
             {
                 auto SharedThis = WeakThis.Pin();
@@ -265,27 +278,27 @@ void FModelDownloader::OnRequestComplete(FHttpRequestPtr Request, FHttpResponseP
                 bSuccess = true;
                 FilePath = FoundTask->DestinationPath;
 
-                // 更新最终大小
                 FoundTask->Item->TotalBytes = ResponseData.Num();
                 FoundTask->Item->ReceivedBytes = ResponseData.Num();
                 FoundTask->Item->Progress = 1.0f;
 
-                UE_LOG(LogHunYuanDownload, Log, TEXT("Download completed: %s (%lld bytes)"),
+                UE_LOG(LogHunYuanDownload, Log, TEXT("OnRequestComplete: Download completed - %s (%lld bytes)"),
                     *FilePath, ResponseData.Num());
             }
             else
             {
-                UE_LOG(LogHunYuanDownload, Error, TEXT("Failed to save file: %s"), *FoundTask->DestinationPath);
+                UE_LOG(LogHunYuanDownload, Error, TEXT("OnRequestComplete: Failed to save file - %s"), *FoundTask->DestinationPath);
             }
         }
         else
         {
-            UE_LOG(LogHunYuanDownload, Error, TEXT("HTTP Error %d for URL: %s"), ResponseCode, *FoundTask->URL);
+            UE_LOG(LogHunYuanDownload, Error, TEXT("OnRequestComplete: HTTP Error %d for URL: %s"),
+                ResponseCode, *FoundTask->URL);
         }
     }
     else
     {
-        UE_LOG(LogHunYuanDownload, Error, TEXT("Connection failed for URL: %s"), *FoundTask->URL);
+        UE_LOG(LogHunYuanDownload, Error, TEXT("OnRequestComplete: Connection failed for URL: %s"), *FoundTask->URL);
     }
 
     CompleteTask(JobId, bSuccess, FilePath);
@@ -301,8 +314,7 @@ void FModelDownloader::CompleteTask(const FString& JobId, bool bSuccess, const F
         {
             CompletedTask = *TaskPtr;
 
-            CompletedTask->Item->Status = bSuccess ? Download::EDownloadStatus::Completed :
-                Download::EDownloadStatus::Failed;
+            CompletedTask->Item->Status = bSuccess ? Download::EDownloadStatus::Completed : Download::EDownloadStatus::Failed;
             if (!bSuccess)
             {
                 CompletedTask->Item->ErrorMessage = TEXT("Download failed");
@@ -316,7 +328,7 @@ void FModelDownloader::CompleteTask(const FString& JobId, bool bSuccess, const F
 
     if (CompletedTask.IsValid())
     {
-        // 触发完成事件（在游戏线程）
+        // 触发完成事件
         AsyncTask(ENamedThreads::GameThread,
             [WeakThis = TWeakPtr<FModelDownloader>(AsShared()), bSuccess, FilePath, Task = CompletedTask]()
             {
@@ -324,6 +336,8 @@ void FModelDownloader::CompleteTask(const FString& JobId, bool bSuccess, const F
                 if (SharedThis.IsValid())
                 {
                     SharedThis->OnDownloadComplete.Broadcast(bSuccess, FilePath);
+
+                    // 执行回调，Handler 会在这里被使用
                     Task->Callback.ExecuteIfBound(*Task->Item);
                 }
             });

@@ -1,0 +1,20 @@
+{
+    "Version": "1.2",
+    "Data": {
+        "Source": "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\private\\error\\hunyuanerrorhandler.cpp",
+        "ProvidedModule": "",
+        "PCH": "d:\\unreal projects\\hunyuantest\\intermediate\\build\\win64\\x64\\hunyuantesteditor\\development\\unrealed\\sharedpch.unrealed.project.valapi.valexpapi.cpp20.h.pch",
+        "Includes": [
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\intermediate\\build\\win64\\x64\\unrealeditor\\development\\hunyuanai\\definitions.hunyuanai.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\error\\hunyuanerrorhandler.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\error\\hunyuanerror.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\slate\\public\\widgets\\notifications\\snotificationlist.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\slate\\public\\framework\\notifications\\notificationmanager.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\core\\public\\misc\\coreasynctasknotificationimpl.h",
+            "d:\\ue5\\ue_5.7\\engine\\source\\runtime\\core\\public\\misc\\asynctasknotification.h",
+            "d:\\unreal projects\\hunyuantest\\plugins\\hunyuanai\\source\\hunyuanai\\public\\logging\\hunyuanlogging.h"
+        ],
+        "ImportedModules": [],
+        "ImportedHeaderUnits": []
+    }
+}

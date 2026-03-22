@@ -91,13 +91,24 @@ void FHunYuanAIModule::ShutdownModule()
     // 注销选项卡生成器
     FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(HunYuanAITabName);
 
-    // 清理 API
+    // 先取消所有请求
     if (API.IsValid())
     {
         API->CancelAllRequests();
-        FHunYuanAPI::Shutdown();
-        API.Reset();
     }
+
+    // 等待所有网络请求完成（让 libcurl 有时间清理）
+    UE_LOG(LogHunYuanAPI, Log, TEXT("Waiting for network requests to complete..."));
+    FPlatformProcess::Sleep(0.5f);  // 添加 0.5 秒延迟
+
+    // 然后关闭 API
+    FHunYuanAPI::Shutdown();
+
+    // 再等待一下让 SDK 内部清理完成
+    UE_LOG(LogHunYuanAPI, Log, TEXT("Waiting for SDK cleanup..."));
+    FPlatformProcess::Sleep(0.1f);
+
+    API.Reset();
 
     UToolMenus::UnRegisterStartupCallback(this);
 

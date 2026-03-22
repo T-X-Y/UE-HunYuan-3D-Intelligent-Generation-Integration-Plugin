@@ -20,5 +20,17 @@
 			"Type": "Editor",
 			"LoadingPhase": "Default"
 		}
+	],
+	"Plugins": [
+		{
+			"Name": "Interchange",
+			"Enabled": true,
+			"Optional": false
+		},
+		{
+			"Name": "UE_RAG_SDK",
+			"Enabled": true,
+			"Optional": false
+		}
 	]
 }

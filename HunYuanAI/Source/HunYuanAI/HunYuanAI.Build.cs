@@ -34,6 +34,19 @@ public class HunYuanAI : ModuleRules
             new string[]
             {
                 "Core",
+
+                // Interchange相关模块
+                "InterchangeCore",
+                "InterchangeEngine",
+                "InterchangeDispatcher",
+                "InterchangeFbxParser",
+                "InterchangeImport",
+                "InterchangeNodes",
+
+                // 静态网格体/材质工厂需要
+                "InterchangeDispatcher",
+                "InterchangeFactoryNodes",
+                "InterchangePipelines"
             }
          );
 
@@ -45,7 +58,6 @@ public class HunYuanAI : ModuleRules
                 "Slate",
                 "SlateCore",
                 
-                // ===== 原有模块依赖 =====
                 "InputCore",
                 "UnrealEd",           // 编辑器功能
                 "AssetTools",         // 资产工具
@@ -60,6 +72,7 @@ public class HunYuanAI : ModuleRules
                 "StaticMeshDescription", // 静态网格描述
                 "MeshUtilities",      // 网格工具
                 "RawMesh",            // 原始网格
+                "MeshDescriptionOperations",
                 
                 // ===== HTTP 相关 =====
                 "HTTP",               // HTTP请求
@@ -74,18 +87,17 @@ public class HunYuanAI : ModuleRules
                 "ToolMenus",          // 工具栏菜单
                 "InputCore",
                 
-                // ===== 新增：历史记录管理需要的模块 =====
-                "Json",               // JSON序列化（已有，确保存在）
-                "JsonUtilities",      // JSON工具（已有）
-                "Projects",           // 路径管理（已有）
-                
-                // 如果需要加密历史记录，可以添加：
-                // "Crypto",           // 加密支持（可选）
-                
-                // 如果需要数据库支持（高级功能）：
-                // "DatabaseSupport",  // 数据库支持（可选）
+                // 历史记录管理需要的模块
+                "Json",               // JSON序列化
+                "JsonUtilities",      // JSON工具
+                "Projects",           // 路径管理
+
+                "UE_RAG_SDK"
             }
         );
+
+        // 添加模块依赖
+        PublicDependencyModuleNames.Add("UE_RAG_SDK");
 
         // 添加库文件
         PublicAdditionalLibraries.AddRange(

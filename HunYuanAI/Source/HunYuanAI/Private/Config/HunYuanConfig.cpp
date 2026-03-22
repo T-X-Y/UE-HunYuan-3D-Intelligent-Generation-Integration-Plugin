@@ -1,4 +1,5 @@
-﻿#include "Config/HunYuanConfig.h"
+﻿// Config/HunYuanConfig.cpp
+#include "Config/HunYuanConfig.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
@@ -13,8 +14,9 @@ namespace HunYuanConfig
         , bAutoImport(true)
         , bShowPreviewAfterDownload(true)
         , Region(TEXT("ap-guangzhou"))
-        , LastUsedModel(TEXT("hunyuan-lite"))
+        , LastUsedModel(TEXT("3.0"))
         , DownloadDirectory(GetDefaultDownloadDirectory())
+        , LastUsedFormat(EConfigFormatPreference::Default)  // 默认格式
     {
     }
 
@@ -36,6 +38,9 @@ namespace HunYuanConfig
         GConfig->SetBool(TEXT("HunYuanAI"), TEXT("ShowPreviewAfterDownload"), bShowPreviewAfterDownload, ConfigFile);
         GConfig->SetString(TEXT("HunYuanAI"), TEXT("Region"), *Region, ConfigFile);
         GConfig->SetString(TEXT("HunYuanAI"), TEXT("LastUsedModel"), *LastUsedModel, ConfigFile);
+
+        // 保存格式偏好（存储为整数）
+        GConfig->SetInt(TEXT("HunYuanAI"), TEXT("LastUsedFormat"), static_cast<int32>(LastUsedFormat), ConfigFile);
 
         if (!DownloadDirectory.IsEmpty())
         {
@@ -84,6 +89,21 @@ namespace HunYuanConfig
         GConfig->GetString(TEXT("HunYuanAI"), TEXT("LastUsedModel"), LastUsedModel, ConfigFile);
         GConfig->GetString(TEXT("HunYuanAI"), TEXT("DownloadDirectory"), DownloadDirectory, ConfigFile);
 
+        // 加载格式偏好（默认值为0 = Default）
+        int32 FormatValue = 0;
+        GConfig->GetInt(TEXT("HunYuanAI"), TEXT("LastUsedFormat"), FormatValue, ConfigFile);
+
+        // 验证格式值是否有效
+        if (FormatValue >= 0 && FormatValue <= static_cast<int32>(EConfigFormatPreference::FBX))
+        {
+            LastUsedFormat = static_cast<EConfigFormatPreference>(FormatValue);
+        }
+        else
+        {
+            LastUsedFormat = EConfigFormatPreference::Default;
+            UE_LOG(LogHunYuanConfig, Warning, TEXT("Invalid format value %d, using default"), FormatValue);
+        }
+
         // 加载凭证（如果记住密码）
         if (bRememberPassword)
         {
@@ -96,6 +116,8 @@ namespace HunYuanConfig
             SecretKey = DeobfuscateString(ObfuscatedKey);
 
             UE_LOG(LogHunYuanConfig, Log, TEXT("Credentials loaded from config"));
+            UE_LOG(LogHunYuanConfig, Log, TEXT("  Format preference: %d (%s)"),
+                static_cast<int32>(LastUsedFormat), *GetFormatName());
         }
 
         // 验证下载目录
@@ -197,6 +219,16 @@ namespace HunYuanConfig
         return UTF8_TO_TCHAR(reinterpret_cast<const char*>(Bytes.GetData()));
     }
 
+    FString FConfigData::GetFormatName() const
+    {
+        return GetFormatDisplayName(LastUsedFormat);
+    }
+
+    FString FConfigData::GetFormatDescription() const
+    {
+        return HunYuanConfig::GetFormatDescription(LastUsedFormat);
+    }
+
     // ==================== 全局辅助函数 ====================
 
     bool EnsureDirectoryExists(const FString& DirectoryPath)
@@ -274,6 +306,14 @@ namespace HunYuanConfig
         GConfig->GetBool(TEXT("HunYuanAI"), TEXT("ShowPreviewAfterDownload"), OutConfig.bShowPreviewAfterDownload, OldConfigFile);
         GConfig->GetString(TEXT("HunYuanAI"), TEXT("DownloadDirectory"), OutConfig.DownloadDirectory, OldConfigFile);
 
+        // 尝试加载旧的格式设置（如果有的话）
+        int32 OldFormat = 0;
+        GConfig->GetInt(TEXT("HunYuanAI"), TEXT("LastUsedFormat"), OldFormat, OldConfigFile);
+        if (OldFormat >= 0 && OldFormat <= static_cast<int32>(EConfigFormatPreference::FBX))
+        {
+            OutConfig.LastUsedFormat = static_cast<EConfigFormatPreference>(OldFormat);
+        }
+
         // 验证数据
         OutConfig.ValidateAndFixDownloadDirectory();
 
@@ -350,6 +390,81 @@ namespace HunYuanConfig
         return FString();
     }
 
+    FString GetFormatDisplayName(EConfigFormatPreference Format)
+    {
+        switch (Format)
+        {
+        case EConfigFormatPreference::Default:
+            return TEXT("默认 (OBJ+GLB)");
+        case EConfigFormatPreference::GLB:
+            return TEXT("GLB格式");
+        case EConfigFormatPreference::OBJ:
+            return TEXT("OBJ格式");
+        case EConfigFormatPreference::STL:
+            return TEXT("STL格式");
+        case EConfigFormatPreference::USDZ:
+            return TEXT("USDZ格式");
+        case EConfigFormatPreference::FBX:
+            return TEXT("FBX格式");
+        default:
+            return TEXT("未知格式");
+        }
+    }
+
+    FString GetFormatDescription(EConfigFormatPreference Format)
+    {
+        switch (Format)
+        {
+        case EConfigFormatPreference::Default:
+            return TEXT("同时返回OBJ和GLB格式");
+        case EConfigFormatPreference::GLB:
+            return TEXT("单个文件，支持PBR材质");
+        case EConfigFormatPreference::OBJ:
+            return TEXT("ZIP压缩包，包含MTL和纹理");
+        case EConfigFormatPreference::STL:
+            return TEXT("仅几何数据，适合3D打印");
+        case EConfigFormatPreference::USDZ:
+            return TEXT("苹果AR格式");
+        case EConfigFormatPreference::FBX:
+            return TEXT("支持动画，适合游戏引擎");
+        default:
+            return TEXT("");
+        }
+    }
+
+    EConfigFormatPreference StringToFormat(const FString& FormatStr)
+    {
+        FString LowerStr = FormatStr.ToLower();
+
+        if (LowerStr == TEXT("glb")) return EConfigFormatPreference::GLB;
+        if (LowerStr == TEXT("obj")) return EConfigFormatPreference::OBJ;
+        if (LowerStr == TEXT("stl")) return EConfigFormatPreference::STL;
+        if (LowerStr == TEXT("usdz")) return EConfigFormatPreference::USDZ;
+        if (LowerStr == TEXT("fbx")) return EConfigFormatPreference::FBX;
+
+        return EConfigFormatPreference::Default;
+    }
+
+    FString FormatToString(EConfigFormatPreference Format)
+    {
+        switch (Format)
+        {
+        case EConfigFormatPreference::GLB:
+            return TEXT("GLB");
+        case EConfigFormatPreference::OBJ:
+            return TEXT("OBJ");
+        case EConfigFormatPreference::STL:
+            return TEXT("STL");
+        case EConfigFormatPreference::USDZ:
+            return TEXT("USDZ");
+        case EConfigFormatPreference::FBX:
+            return TEXT("FBX");
+        case EConfigFormatPreference::Default:
+        default:
+            return TEXT("");
+        }
+    }
+
     // ==================== 序列化 ====================
 
     TSharedPtr<FJsonObject> FConfigData::ToJson() const
@@ -361,6 +476,7 @@ namespace HunYuanConfig
         Json->SetStringField(TEXT("DownloadDirectory"), DownloadDirectory);
         Json->SetBoolField(TEXT("AutoImport"), bAutoImport);
         Json->SetBoolField(TEXT("ShowPreviewAfterDownload"), bShowPreviewAfterDownload);
+        Json->SetNumberField(TEXT("LastUsedFormat"), static_cast<double>(LastUsedFormat));
 
         // 不保存凭证到JSON
 
@@ -379,6 +495,16 @@ namespace HunYuanConfig
         Json->TryGetStringField(TEXT("DownloadDirectory"), DownloadDirectory);
         Json->TryGetBoolField(TEXT("AutoImport"), bAutoImport);
         Json->TryGetBoolField(TEXT("ShowPreviewAfterDownload"), bShowPreviewAfterDownload);
+
+        double FormatValue = 0;
+        if (Json->TryGetNumberField(TEXT("LastUsedFormat"), FormatValue))
+        {
+            int32 FormatInt = static_cast<int32>(FormatValue);
+            if (FormatInt >= 0 && FormatInt <= static_cast<int32>(EConfigFormatPreference::FBX))
+            {
+                LastUsedFormat = static_cast<EConfigFormatPreference>(FormatInt);
+            }
+        }
 
         ValidateAndFixDownloadDirectory();
 

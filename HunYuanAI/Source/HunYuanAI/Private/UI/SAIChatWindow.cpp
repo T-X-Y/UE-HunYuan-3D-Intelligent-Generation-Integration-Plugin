@@ -1,22 +1,27 @@
-﻿#include "UI/SAIChatWindow.h"
+﻿// SAIChatWindow.cpp
+// 核心逻辑：构造/析构、消息处理、配置管理、模型选择、格式选择、生成任务、下载处理、模型处理、历史管理、UI状态更新、知识图谱集成
+
+#include "UI/SAIChatWindow.h"
+#include "UI/SKnowledgeGraphSearchWidget.h"
 #include "HunYuanAI.h"
+#include "API/HunYuanAPITypes.h"
 #include "Logging/HunYuanLogging.h"
-#include "Widgets/Layout/SGridPanel.h"
-#include "Widgets/Layout/SBox.h"
-#include "Widgets/Layout/SScrollBox.h"
-#include "Widgets/Input/SMultiLineEditableTextBox.h"
+#include "Download/DownloadHandlerFactory.h"
 #include "DesktopPlatformModule.h"
 #include "IDesktopPlatform.h"
 #include "HAL/PlatformFileManager.h"
 #include "Misc/FileHelper.h"
-#include "ImageUtils.h"
-#include "IImageWrapper.h"
-#include "IImageWrapperModule.h"
-#include "Modules/ModuleManager.h"
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Editor.h"
+#include "Engine/GameInstance.h"
+#include "Engine/Texture2D.h"
 
 #define LOCTEXT_NAMESPACE "SAIChatWindow"
+
+// ==================== 构造/析构 ====================
 
 void SAIChatWindow::Construct(const FArguments& InArgs)
 {
@@ -33,69 +38,36 @@ void SAIChatWindow::Construct(const FArguments& InArgs)
     ImageBrush = MakeShareable(new FSlateBrush());
     ImageBrush->DrawAs = ESlateBrushDrawType::Image;
 
+    // 添加格式选项
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::Default)));
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::GLB)));
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::OBJ)));
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::STL)));
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::USDZ)));
+    FormatOptions.Add(MakeShareable(new EModelFormatPreference(EModelFormatPreference::FBX)));
+
+    // 加载保存的格式偏好
+    LoadFormatPreference();
+
+    // 添加知识图谱搜索面板
+    AddKnowledgeGraphSearchPanel();
+
+    // 左右分屏布局
     ChildSlot
         [
-            SNew(SScrollBox)
-                + SScrollBox::Slot()
-                .Padding(10)
+            SNew(SSplitter)
+                .Orientation(Orient_Horizontal)
+                .ResizeMode(ESplitterResizeMode::FixedPosition)
+                + SSplitter::Slot()
+                .Value(0.65f)
                 [
-                    SNew(SVerticalBox)
-
-                        // API配置区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildApiConfigSection()
-                        ]
-
-                        // 导入选项区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildImportOptionsSection()
-                        ]
-
-                        // 模型选择区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildModelSelectionSection()
-                        ]
-
-                        // 图片上传区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildImageUploadSection()
-                        ]
-
-                        // 对话历史区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildChatHistorySection()
-                        ]
-
-                        // 进度区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildProgressSection()
-                        ]
-
-                        // 输入区域
-                        + SVerticalBox::Slot()
-                        .AutoHeight()
-                        .Padding(5)
-                        [
-                            BuildInputSection()
-                        ]
+                    BuildMainPanel()
+                ]
+                + SSplitter::Slot()
+                .Value(0.35f)
+                .OnSlotResized(SSplitter::FOnSlotResized::CreateSP(this, &SAIChatWindow::OnSidebarResized))
+                [
+                    BuildSidebar()
                 ]
         ];
 
@@ -104,7 +76,6 @@ void SAIChatWindow::Construct(const FArguments& InArgs)
 
     // 绑定事件
     Downloader->OnDownloadProgress.AddSP(this, &SAIChatWindow::OnDownloadProgress);
-    Downloader->OnDownloadComplete.AddSP(this, &SAIChatWindow::OnDownloadComplete);
 
     // 加载历史
     LoadDownloadHistory();
@@ -113,361 +84,23 @@ void SAIChatWindow::Construct(const FArguments& InArgs)
     Chat::FChatMessage WelcomeMsg;
     WelcomeMsg.Type = Chat::EMessageType::System;
     WelcomeMsg.Sender = TEXT("系统");
-    WelcomeMsg.Content = TEXT("欢迎使用混元3D生成工具！请输入文字描述或上传图片开始生成3D模型。");
+    WelcomeMsg.Content = TEXT("欢迎使用混元3D生成工具！请输入文字描述或上传图片开始生成3D模型。\n右侧知识图谱搜索可帮助您查找相关文档和资产参考。");
     AddMessage(WelcomeMsg);
 }
 
 SAIChatWindow::~SAIChatWindow()
 {
-    // 取消所有下载
     if (Downloader.IsValid())
     {
         Downloader->CancelAllDownloads();
     }
 
-    // 保存历史
     SaveDownloadHistory();
 
-    // 关闭预览窗口
     if (ModelInfoWindow.IsValid())
     {
         ModelInfoWindow->RequestDestroyWindow();
     }
-}
-
-// ==================== UI 构建 ====================
-
-TSharedRef<SWidget> SAIChatWindow::BuildApiConfigSection()
-{
-    return SNew(SBorder)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.15f, 0.15f, 0.15f, 1.0f))
-        .Padding(10)
-        [
-            SNew(SVerticalBox)
-
-                // 标题
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(0, 0, 0, 10)
-                [
-                    SNew(STextBlock)
-                        .Text(LOCTEXT("ApiConfig", "API 配置"))
-                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
-                ]
-
-                // SecretId输入
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SNew(SHorizontalBox)
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .VAlign(VAlign_Center)
-                        .Padding(0, 0, 10, 0)
-                        [
-                            SNew(STextBlock)
-                                .Text(LOCTEXT("SecretId", "SecretId:"))
-                                .MinDesiredWidth(80)
-                        ]
-                        + SHorizontalBox::Slot()
-                        .FillWidth(1.0f)
-                        [
-                            SAssignNew(SecretIdInput, SEditableTextBox)
-                                .HintText(LOCTEXT("SecretIdHint", "输入SecretId"))
-                        ]
-                ]
-
-            // SecretKey输入
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SNew(SHorizontalBox)
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .VAlign(VAlign_Center)
-                        .Padding(0, 0, 10, 0)
-                        [
-                            SNew(STextBlock)
-                                .Text(LOCTEXT("SecretKey", "SecretKey:"))
-                                .MinDesiredWidth(80)
-                        ]
-                        + SHorizontalBox::Slot()
-                        .FillWidth(1.0f)
-                        [
-                            SAssignNew(SecretKeyInput, SEditableTextBox)
-                                .HintText(LOCTEXT("SecretKeyHint", "输入SecretKey"))
-                                .IsPassword(true)
-                        ]
-                ]
-
-            // 记住密码和保存按钮
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SNew(SHorizontalBox)
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .VAlign(VAlign_Center)
-                        [
-                            SAssignNew(RememberPasswordCheckBox, SCheckBox)
-                                [
-                                    SNew(STextBlock)
-                                        .Text(LOCTEXT("RememberPassword", "记住密码"))
-                                ]
-                        ]
-                    + SHorizontalBox::Slot()
-                        .FillWidth(1.0f)
-                        .HAlign(HAlign_Right)
-                        [
-                            SNew(SButton)
-                                .Text(LOCTEXT("SaveConfig", "保存配置"))
-                                .OnClicked(this, &SAIChatWindow::OnSaveConfigButtonClicked)
-                        ]
-                ]
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildImportOptionsSection()
-{
-    return SNew(SBorder)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.15f, 0.15f, 0.15f, 1.0f))
-        .Padding(10)
-        [
-            SNew(SVerticalBox)
-
-                // 标题
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(0, 0, 0, 10)
-                [
-                    SNew(STextBlock)
-                        .Text(LOCTEXT("ImportOptions", "导入选项"))
-                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
-                ]
-
-                // 自动导入
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SAssignNew(AutoImportCheckBox, SCheckBox)
-                        [
-                            SNew(STextBlock)
-                                .Text(LOCTEXT("AutoImport", "下载完成后自动导入到内容浏览器"))
-                        ]
-                ]
-
-            // 显示预览
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SAssignNew(ShowPreviewCheckBox, SCheckBox)
-                        [
-                            SNew(STextBlock)
-                                .Text(LOCTEXT("ShowPreview", "下载完成后显示模型预览窗口"))
-                        ]
-                ]
-
-            // 下载目录
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SNew(SHorizontalBox)
-                        + SHorizontalBox::Slot()
-                        .FillWidth(1.0f)
-                        .VAlign(VAlign_Center)
-                        [
-                            SAssignNew(DownloadDirText, STextBlock)
-                                .AutoWrapText(true)
-                        ]
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        [
-                            SNew(SButton)
-                                .Text(LOCTEXT("SelectDirectory", "选择目录"))
-                                .OnClicked(this, &SAIChatWindow::OnSelectDownloadDirectoryClicked)
-                        ]
-                ]
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildModelSelectionSection()
-{
-    return SNew(SBorder)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.15f, 0.15f, 0.15f, 1.0f))
-        .Padding(10)
-        [
-            SNew(SHorizontalBox)
-
-                + SHorizontalBox::Slot()
-                .AutoWidth()
-                .VAlign(VAlign_Center)
-                .Padding(0, 0, 10, 0)
-                [
-                    SNew(STextBlock)
-                        .Text(LOCTEXT("SelectModel", "选择模型:"))
-                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
-                ]
-
-                + SHorizontalBox::Slot()
-                .AutoWidth()
-                [
-                    SNew(SComboBox<TSharedPtr<FModelOption>>)
-                        .OptionsSource(&ModelOptions)
-                        .InitiallySelectedItem(CurrentSelectedModel)
-                        .OnGenerateWidget(this, &SAIChatWindow::GenerateModelOptionWidget)
-                        .OnSelectionChanged(this, &SAIChatWindow::OnModelSelectionChanged)
-                        .Content()
-                        [
-                            SNew(STextBlock)
-                                .Text(this, &SAIChatWindow::GetCurrentModelText)
-                        ]
-                ]
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildImageUploadSection()
-{
-    return SNew(SBorder)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.15f, 0.15f, 0.15f, 1.0f))
-        .Padding(10)
-        [
-            SNew(SVerticalBox)
-
-                // 预览区域
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .HAlign(HAlign_Center)
-                [
-                    SNew(SBox)
-                        .WidthOverride(200)
-                        .HeightOverride(200)
-                        [
-                            SAssignNew(ImagePreviewWidget, SImage)
-                                .Image(ImageBrush.Get())
-                        ]
-                ]
-
-            // 上传进度
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SAssignNew(UploadProgressBar, SProgressBar)
-                        .Visibility(EVisibility::Collapsed)
-                ]
-
-                // 按钮区域
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SNew(SHorizontalBox)
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .Padding(5)
-                        [
-                            SNew(SButton)
-                                .Text(LOCTEXT("UploadImage", "上传图片"))
-                                .OnClicked(this, &SAIChatWindow::OnUploadImageButtonClicked)
-                        ]
-                        + SHorizontalBox::Slot()
-                        .AutoWidth()
-                        .Padding(5)
-                        [
-                            SNew(SButton)
-                                .Text(LOCTEXT("ClearImage", "清除图片"))
-                                .OnClicked(this, &SAIChatWindow::OnClearImageButtonClicked)
-                                .IsEnabled_Lambda([this]() { return !CurrentImagePath.IsEmpty(); })
-                        ]
-                ]
-
-            // 图片信息
-            + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(5)
-                [
-                    SAssignNew(ImageInfoText, STextBlock)
-                        .Text(LOCTEXT("NoImage", "未选择图片"))
-                        .ColorAndOpacity(FLinearColor::Gray)
-                ]
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildChatHistorySection()
-{
-    return SNew(SBorder)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.1f, 0.1f, 0.1f, 1.0f))
-        .Padding(5)
-        [
-            SAssignNew(MessagesListView, SListView<TSharedPtr<Chat::FChatMessage>>)
-                .ListItemsSource(&Messages)
-                .OnGenerateRow(this, &SAIChatWindow::GenerateMessageRow)
-                .ItemHeight(24)
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildProgressSection()
-{
-    return SAssignNew(ProgressContainer, SBorder)
-        .Visibility(EVisibility::Collapsed)
-        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
-        .BorderBackgroundColor(FLinearColor(0.2f, 0.2f, 0.2f, 1.0f))
-        .Padding(10)
-        [
-            SNew(SVerticalBox)
-
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                .Padding(0, 0, 0, 5)
-                [
-                    SAssignNew(ProgressText, STextBlock)
-                        .Text(LOCTEXT("Generating", "生成中..."))
-                ]
-
-                + SVerticalBox::Slot()
-                .AutoHeight()
-                [
-                    SAssignNew(ProgressBar, SProgressBar)
-                        .Percent(this, &SAIChatWindow::GetProgressPercent)
-                ]
-        ];
-}
-
-TSharedRef<SWidget> SAIChatWindow::BuildInputSection()
-{
-    return SNew(SHorizontalBox)
-
-        + SHorizontalBox::Slot()
-        .FillWidth(1.0f)
-        .Padding(5)
-        [
-            SAssignNew(InputTextBox, SEditableTextBox)
-                .HintText(LOCTEXT("InputHint", "请描述你想生成的内容..."))
-                .OnTextCommitted(this, &SAIChatWindow::OnInputTextCommitted)
-        ]
-
-        + SHorizontalBox::Slot()
-        .AutoWidth()
-        .Padding(5)
-        [
-            SNew(SButton)
-                .Text(LOCTEXT("Send", "发送"))
-                .OnClicked(this, &SAIChatWindow::OnSendButtonClicked)
-                .IsEnabled_Lambda([this]() {
-                return CurrentTask.Status == Chat::EGenerationStatus::Idle;
-                    })
-        ];
 }
 
 // ==================== 消息处理 ====================
@@ -533,6 +166,8 @@ TSharedRef<ITableRow> SAIChatWindow::GenerateMessageRow(
     case Chat::EMessageType::Progress:
         TextColor = FLinearColor(1.0f, 1.0f, 0.4f);
         break;
+    default:
+        break;
     }
 
     return SNew(STableRow<TSharedPtr<Chat::FChatMessage>>, OwnerTable)
@@ -542,121 +177,6 @@ TSharedRef<ITableRow> SAIChatWindow::GenerateMessageRow(
                 .AutoWrapText(true)
                 .ColorAndOpacity(TextColor)
         ];
-}
-
-// ==================== 图片上传 ====================
-
-FReply SAIChatWindow::OnUploadImageButtonClicked()
-{
-    IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
-    if (DesktopPlatform)
-    {
-        TArray<FString> OutFiles;
-        const FString FileTypes = TEXT("图片文件|*.jpg;*.jpeg;*.png;*.bmp|所有文件|*.*");
-
-        if (DesktopPlatform->OpenFileDialog(
-            FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
-            TEXT("选择图片"),
-            FPaths::ProjectContentDir(),
-            TEXT(""),
-            FileTypes,
-            EFileDialogFlags::None,
-            OutFiles))
-        {
-            if (OutFiles.Num() > 0)
-            {
-                HandleUploadedImage(OutFiles[0]);
-            }
-        }
-    }
-    return FReply::Handled();
-}
-
-FReply SAIChatWindow::OnClearImageButtonClicked()
-{
-    CurrentImagePath.Empty();
-    ImageInfoText->SetText(LOCTEXT("NoImage", "未选择图片"));
-    ImageBrush->SetResourceObject(nullptr);
-    ImagePreviewWidget->SetImage(nullptr);
-    return FReply::Handled();
-}
-
-void SAIChatWindow::HandleUploadedImage(const FString& ImagePath)
-{
-    CurrentImagePath = ImagePath;
-
-    // 更新图片信息
-    FString FileName = FPaths::GetCleanFilename(ImagePath);
-    int64 FileSize = IFileManager::Get().FileSize(*ImagePath);
-    FString SizeStr = FString::Printf(TEXT("%.1f KB"), FileSize / 1024.0f);
-
-    ImageInfoText->SetText(FText::Format(
-        LOCTEXT("ImageSelected", "已选择: {0} ({1})"),
-        FText::FromString(FileName),
-        FText::FromString(SizeStr)
-    ));
-
-    // 加载预览
-    LoadImagePreview(ImagePath);
-}
-
-bool SAIChatWindow::LoadImagePreview(const FString& ImagePath)
-{
-    // 读取文件数据
-    TArray<uint8> FileData;
-    if (!FFileHelper::LoadFileToArray(FileData, *ImagePath))
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to load image file: %s"), *ImagePath);
-        return false;
-    }
-
-    // 获取 ImageWrapper 模块
-    IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
-
-    // 检测图片格式
-    EImageFormat Format = ImageWrapperModule.DetectImageFormat(FileData.GetData(), FileData.Num());
-    if (Format == EImageFormat::Invalid)
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Unsupported image format: %s"), *ImagePath);
-        return false;
-    }
-
-    // 创建 ImageWrapper
-    TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(Format);
-    if (!ImageWrapper.IsValid() || !ImageWrapper->SetCompressed(FileData.GetData(), FileData.Num()))
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to set compressed data: %s"), *ImagePath);
-        return false;
-    }
-
-    // 获取原始数据
-    TArray<uint8> RawData;
-    if (!ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, RawData))
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to get raw data: %s"), *ImagePath);
-        return false;
-    }
-
-    // 创建纹理
-    UTexture2D* Texture = UTexture2D::CreateTransient(ImageWrapper->GetWidth(), ImageWrapper->GetHeight(), PF_B8G8R8A8);
-    if (!Texture)
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to create transient texture"));
-        return false;
-    }
-
-    // 锁定纹理并填充数据
-    void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
-    FMemory::Memcpy(TextureData, RawData.GetData(), RawData.Num());
-    Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
-    Texture->UpdateResource();
-
-    // 更新 Slate 画笔
-    ImageBrush->SetResourceObject(Texture);
-    ImageBrush->ImageSize = FVector2D(ImageWrapper->GetWidth(), ImageWrapper->GetHeight());
-    ImagePreviewWidget->SetImage(ImageBrush.Get());
-
-    return true;
 }
 
 // ==================== 配置管理 ====================
@@ -673,6 +193,7 @@ void SAIChatWindow::LoadConfig()
     AutoImportCheckBox->SetIsChecked(Config.bAutoImport ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
     ShowPreviewCheckBox->SetIsChecked(Config.bShowPreviewAfterDownload ? ECheckBoxState::Checked : ECheckBoxState::Unchecked);
     DownloadDirText->SetText(FText::FromString(Config.DownloadDirectory));
+    CurrentFormatPreference = static_cast<EModelFormatPreference>(Config.LastUsedFormat);
 
     // 绑定配置变更事件
     ConfigManager->OnConfigChanged.AddSP(this, &SAIChatWindow::OnConfigChanged);
@@ -681,11 +202,6 @@ void SAIChatWindow::LoadConfig()
     if (Config.HasValidCredentials())
     {
         FHunYuanAPI::Get()->SetCredentials(Config.SecretId, Config.SecretKey, Config.Region);
-        UE_LOG(LogHunYuanUI, Log, TEXT("API credentials set from config"));
-    }
-    else
-    {
-        UE_LOG(LogHunYuanUI, Warning, TEXT("No valid credentials in config, please enter them manually"));
     }
 }
 
@@ -721,14 +237,57 @@ FReply SAIChatWindow::OnSaveConfigButtonClicked()
     if (Config.HasValidCredentials())
     {
         FHunYuanAPI::Get()->SetCredentials(Config.SecretId, Config.SecretKey, Config.Region);
-        UE_LOG(LogHunYuanUI, Log, TEXT("API credentials updated from UI"));
         AddSystemMessage(TEXT("凭证已生效"));
     }
     else
     {
         AddSystemMessage(TEXT("配置已保存，但凭证不完整"));
     }
+
     return FReply::Handled();
+}
+
+void SAIChatWindow::OnRememberPasswordCheckStateChanged(ECheckBoxState NewState)
+{
+    auto ConfigManager = FHunYuanConfigManager::Get();
+    auto Config = ConfigManager->GetConfig();
+
+    Config.bRememberPassword = (NewState == ECheckBoxState::Checked);
+
+    if (!Config.bRememberPassword)
+    {
+        Config.SecretId.Empty();
+        Config.SecretKey.Empty();
+        SecretIdInput->SetText(FText::GetEmpty());
+        SecretKeyInput->SetText(FText::GetEmpty());
+    }
+
+    ConfigManager->UpdateConfig(Config);
+    AddSystemMessage(Config.bRememberPassword ? TEXT("已启用记住密码") : TEXT("已禁用记住密码"));
+}
+
+void SAIChatWindow::UpdateCredentialsUI()
+{
+    auto Config = FHunYuanConfigManager::Get()->GetConfig();
+
+    if (!Config.bRememberPassword && Config.HasValidCredentials())
+    {
+        // 不记住密码但有保存的凭证，显示提示文本
+        SecretIdInput->SetHintText(FText::Format(
+            LOCTEXT("SecretIdHintWithSaved", "SecretId已保存 (勾选“记住密码”后显示) - {0}..."),
+            FText::FromString(Config.SecretId.Left(8))));
+
+        SecretKeyInput->SetHintText(LOCTEXT("SecretKeyHintWithSaved", "SecretKey已保存 (勾选“记住密码”后显示)"));
+
+        SecretIdInput->SetText(FText::GetEmpty());
+        SecretKeyInput->SetText(FText::GetEmpty());
+    }
+    else
+    {
+        // 正常模式
+        SecretIdInput->SetHintText(LOCTEXT("SecretIdHint", "输入SecretId"));
+        SecretKeyInput->SetHintText(LOCTEXT("SecretKeyHint", "输入SecretKey"));
+    }
 }
 
 // ==================== 模型选择 ====================
@@ -754,16 +313,225 @@ FText SAIChatWindow::GetCurrentModelText() const
         : LOCTEXT("NoModel", "选择模型");
 }
 
+// ==================== 格式选择 ====================
+
+TSharedRef<SWidget> SAIChatWindow::BuildFormatSelectionSection()
+{
+    TSharedPtr<EModelFormatPreference> InitiallySelected = nullptr;
+    for (auto& Option : FormatOptions)
+    {
+        if (*Option == CurrentFormatPreference)
+        {
+            InitiallySelected = Option;
+            break;
+        }
+    }
+
+    return SNew(SBorder)
+        .BorderImage(FCoreStyle::Get().GetBrush("GenericWhiteBox"))
+        .BorderBackgroundColor(FLinearColor(0.15f, 0.15f, 0.15f, 1.0f))
+        .Padding(10)
+        [
+            SNew(SVerticalBox)
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(0, 0, 0, 10)
+                [
+                    SNew(STextBlock)
+                        .Text(LOCTEXT("FormatSelection", "输出格式选择"))
+                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                [
+                    SNew(SHorizontalBox)
+
+                        + SHorizontalBox::Slot()
+                        .AutoWidth()
+                        .VAlign(VAlign_Center)
+                        .Padding(0, 0, 10, 0)
+                        [
+                            SNew(STextBlock)
+                                .Text(LOCTEXT("SelectFormat", "选择格式:"))
+                        ]
+
+                        + SHorizontalBox::Slot()
+                        .AutoWidth()
+                        [
+                            SAssignNew(FormatComboBox, SComboBox<TSharedPtr<EModelFormatPreference>>)
+                                .OptionsSource(&FormatOptions)
+                                .InitiallySelectedItem(InitiallySelected)
+                                .OnGenerateWidget(this, &SAIChatWindow::GenerateFormatOptionWidget)
+                                .OnSelectionChanged(this, &SAIChatWindow::OnFormatSelectionChanged)
+                                .Content()
+                                [
+                                    SNew(STextBlock)
+                                        .Text(this, &SAIChatWindow::GetCurrentFormatText)
+                                ]
+                        ]
+
+                    + SHorizontalBox::Slot()
+                        .FillWidth(1.0f)
+                        .HAlign(HAlign_Right)
+                        .VAlign(VAlign_Center)
+                        [
+                            SNew(STextBlock)
+                                .Text_Lambda([this]()
+                                    {
+                                        return GetFormatDescription(CurrentFormatPreference);
+                                    })
+                                .ColorAndOpacity(FLinearColor::Gray)
+                                .Font(FCoreStyle::GetDefaultFontStyle("Italic", 10))
+                        ]
+                ]
+
+            + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(0, 5, 0, 0)
+                [
+                    SNew(STextBlock)
+                        .Text(LOCTEXT("FormatHint", "注：如果选择的格式不可用，将自动降级为默认格式"))
+                        .ColorAndOpacity(FLinearColor::Yellow)
+                        .Font(FCoreStyle::GetDefaultFontStyle("Italic", 9))
+                ]
+        ];
+}
+
+TSharedRef<SWidget> SAIChatWindow::GenerateFormatOptionWidget(TSharedPtr<EModelFormatPreference> InOption)
+{
+    if (!InOption.IsValid())
+    {
+        return SNew(STextBlock).Text(LOCTEXT("Invalid", "无效"));
+    }
+
+    FText DisplayText;
+    switch (*InOption)
+    {
+    case EModelFormatPreference::Default:
+        DisplayText = LOCTEXT("FormatDefault", "默认格式 (OBJ + GLB)");
+        break;
+    case EModelFormatPreference::GLB:
+        DisplayText = LOCTEXT("FormatGLB", "GLB格式 (二进制glTF)");
+        break;
+    case EModelFormatPreference::OBJ:
+        DisplayText = LOCTEXT("FormatOBJ", "OBJ格式 (包含MTL纹理)");
+        break;
+    case EModelFormatPreference::STL:
+        DisplayText = LOCTEXT("FormatSTL", "STL格式 (3D打印)");
+        break;
+    case EModelFormatPreference::USDZ:
+        DisplayText = LOCTEXT("FormatUSDZ", "USDZ格式 (AR增强现实)");
+        break;
+    case EModelFormatPreference::FBX:
+        DisplayText = LOCTEXT("FormatFBX", "FBX格式 (动画/游戏)");
+        break;
+    default:
+        DisplayText = LOCTEXT("FormatUnknown", "未知格式");
+        break;
+    }
+
+    return SNew(STextBlock).Text(DisplayText);
+}
+
+void SAIChatWindow::OnFormatSelectionChanged(TSharedPtr<EModelFormatPreference> NewSelection, ESelectInfo::Type SelectInfo)
+{
+    if (NewSelection.IsValid())
+    {
+        CurrentFormatPreference = *NewSelection;
+        SaveFormatPreference();
+
+        FString FormatName = GetCurrentFormatText().ToString();
+        AddSystemMessage(FString::Printf(TEXT("输出格式已切换为: %s"), *FormatName));
+    }
+}
+
+FText SAIChatWindow::GetCurrentFormatText() const
+{
+    switch (CurrentFormatPreference)
+    {
+    case EModelFormatPreference::Default: return LOCTEXT("FormatDefault", "默认");
+    case EModelFormatPreference::GLB:    return LOCTEXT("FormatGLB", "GLB");
+    case EModelFormatPreference::OBJ:    return LOCTEXT("FormatOBJ", "OBJ");
+    case EModelFormatPreference::STL:    return LOCTEXT("FormatSTL", "STL");
+    case EModelFormatPreference::USDZ:   return LOCTEXT("FormatUSDZ", "USDZ");
+    case EModelFormatPreference::FBX:    return LOCTEXT("FormatFBX", "FBX");
+    default:                             return LOCTEXT("FormatUnknown", "未知");
+    }
+}
+
+FText SAIChatWindow::GetFormatDescription(EModelFormatPreference Format) const
+{
+    switch (Format)
+    {
+    case EModelFormatPreference::Default: return LOCTEXT("DescDefault", "同时返回OBJ和GLB格式");
+    case EModelFormatPreference::GLB:     return LOCTEXT("DescGLB", "单个文件，支持PBR材质");
+    case EModelFormatPreference::OBJ:     return LOCTEXT("DescOBJ", "ZIP压缩包，包含MTL和纹理");
+    case EModelFormatPreference::STL:     return LOCTEXT("DescSTL", "仅几何数据，适合3D打印");
+    case EModelFormatPreference::USDZ:    return LOCTEXT("DescUSDZ", "苹果AR格式");
+    case EModelFormatPreference::FBX:     return LOCTEXT("DescFBX", "支持动画，适合游戏引擎");
+    default:                              return FText::GetEmpty();
+    }
+}
+
+EModelFormat SAIChatWindow::ConvertToAPIModelFormat(EModelFormatPreference Preference) const
+{
+    switch (Preference)
+    {
+    case EModelFormatPreference::Default: return EModelFormat::Default;
+    case EModelFormatPreference::GLB:     return EModelFormat::GLB;
+    case EModelFormatPreference::OBJ:     return EModelFormat::OBJ;
+    case EModelFormatPreference::STL:     return EModelFormat::STL;
+    case EModelFormatPreference::USDZ:    return EModelFormat::USDZ;
+    case EModelFormatPreference::FBX:     return EModelFormat::FBX;
+    default:                              return EModelFormat::Default;
+    }
+}
+
+void SAIChatWindow::SaveFormatPreference()
+{
+    auto Config = FHunYuanConfigManager::Get()->GetConfig();
+    Config.LastUsedFormat = static_cast<EConfigFormatPreference>(CurrentFormatPreference);
+    FHunYuanConfigManager::Get()->UpdateConfig(Config);
+}
+
+void SAIChatWindow::LoadFormatPreference()
+{
+    int32 SavedFormat = static_cast<int32>(EModelFormatPreference::Default);
+    GConfig->GetInt(TEXT("HunYuanAI"), TEXT("FormatPreference"), SavedFormat, GEditorPerProjectIni);
+
+    CurrentFormatPreference = (SavedFormat >= 0 && SavedFormat < FormatOptions.Num())
+        ? static_cast<EModelFormatPreference>(SavedFormat)
+        : EModelFormatPreference::Default;
+}
+
 // ==================== 生成任务 ====================
 
-FReply SAIChatWindow::OnSendButtonClicked()
+void SAIChatWindow::SubmitGenerationTask()
 {
     FString Prompt = InputTextBox->GetText().ToString().TrimStartAndEnd();
 
-    if (Prompt.IsEmpty() && CurrentImagePath.IsEmpty())
+    // 验证输入
+    if (Prompt.IsEmpty() && !bUseMultiViewMode && CurrentImagePath.IsEmpty())
     {
         AddErrorMessage(TEXT("请输入文字描述或上传图片"));
-        return FReply::Handled();
+        return;
+    }
+
+    if (bUseMultiViewMode)
+    {
+        if (GetValidViewCount() == 0)
+        {
+            AddErrorMessage(TEXT("请至少上传一张正视图图片"));
+            return;
+        }
+
+        if (!IsViewImageValid(EViewType::Front))
+        {
+            AddErrorMessage(TEXT("多视图模式下必须包含正视图"));
+            return;
+        }
     }
 
     // 检查API是否就绪
@@ -771,12 +539,16 @@ FReply SAIChatWindow::OnSendButtonClicked()
     if (!Config.HasValidCredentials())
     {
         AddErrorMessage(TEXT("请先配置API凭证"));
-        return FReply::Handled();
+        return;
     }
 
     // 添加用户消息
     FString UserMessage = Prompt;
-    if (!CurrentImagePath.IsEmpty())
+    if (bUseMultiViewMode)
+    {
+        UserMessage += FString::Printf(TEXT(" [多视图模式: %d张图片]"), GetValidViewCount());
+    }
+    else if (!CurrentImagePath.IsEmpty())
     {
         UserMessage += FString::Printf(TEXT(" [图片: %s]"), *FPaths::GetCleanFilename(CurrentImagePath));
     }
@@ -796,8 +568,54 @@ FReply SAIChatWindow::OnSendButtonClicked()
     ProgressContainer->SetVisibility(EVisibility::Visible);
     UpdateProgress(CurrentTask);
 
-    // 提交任务
-    if (!CurrentImagePath.IsEmpty())
+    // 根据模式提交任务
+    if (bUseMultiViewMode)
+    {
+        // 创建多视图输入
+        HunYuanAPI::FMultiViewInput MultiViewInput;
+
+        // 遍历所有视图，收集有效的图片
+        for (auto& Pair : ViewImages)
+        {
+            UE_LOG(LogTemp, Log, TEXT("检查视图 %d: bIsLoaded=%d, Base64长度=%d, 文件路径=%s"),
+                (int32)Pair.Key, Pair.Value.bIsLoaded, Pair.Value.Base64Data.Len(), *Pair.Value.FilePath);
+
+            if (Pair.Value.bIsLoaded && !Pair.Value.Base64Data.IsEmpty())
+            {
+                // 创建图片信息
+                HunYuanAPI::FMultiViewImage ImageInfo;
+                ImageInfo.ViewType = Pair.Key;
+                ImageInfo.FilePath = Pair.Value.FilePath;
+                ImageInfo.Base64Data = Pair.Value.Base64Data;
+                ImageInfo.bIsValid = true;
+
+                // 添加到输入中
+                MultiViewInput.Images.Add(ImageInfo);
+
+                UE_LOG(LogTemp, Log, TEXT("成功添加图片: ViewType=%s, Base64长度=%d"),
+                    *ImageInfo.GetViewTypeString(), ImageInfo.Base64Data.Len());
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("跳过无效视图 %d: bIsLoaded=%d, Base64长度=%d"),
+                    (int32)Pair.Key, Pair.Value.bIsLoaded, Pair.Value.Base64Data.Len());
+            }
+        }
+
+        // 验证是否有有效的图片
+        if (MultiViewInput.Images.Num() == 0)
+        {
+            AddErrorMessage(TEXT("没有有效的多视图图片，请重新上传"));
+            UE_LOG(LogTemp, Error, TEXT("提交失败：MultiViewInput.Images 为空"));
+            return;
+        }
+
+        UE_LOG(LogTemp, Warning, TEXT("准备提交多视图任务，共 %d 张图片"), MultiViewInput.Images.Num());
+
+        // 提交多视图任务
+        SubmitMultiViewTo3D(MultiViewInput);
+    }
+    else if (!CurrentImagePath.IsEmpty())
     {
         SubmitImageTo3D(CurrentImagePath);
     }
@@ -805,7 +623,11 @@ FReply SAIChatWindow::OnSendButtonClicked()
     {
         SubmitTextTo3D(Prompt);
     }
+}
 
+FReply SAIChatWindow::OnSendButtonClicked()
+{
+    SubmitGenerationTask();
     return FReply::Handled();
 }
 
@@ -821,7 +643,9 @@ void SAIChatWindow::SubmitTextTo3D(const FString& Prompt)
 {
     AddSystemMessage(TEXT("正在提交文生3D任务..."));
 
-    FHunYuanAPI::Get()->SubmitProJobFromText(Prompt,
+    FHunYuanAPI::Get()->SubmitProJobFromText(
+        Prompt,
+        ConvertToAPIModelFormat(CurrentFormatPreference),
         FOnJobSubmitted::CreateSP(this, &SAIChatWindow::OnJobSubmitted));
 }
 
@@ -837,9 +661,10 @@ void SAIChatWindow::SubmitImageTo3D(const FString& ImagePath)
         return;
     }
 
-    // TODO: 实现图生3D API调用
-    AddErrorMessage(TEXT("图生3D功能开发中"));
-    ClearProgress();
+    FHunYuanAPI::Get()->SubmitProJobFromImage(
+        ImageData,
+        ConvertToAPIModelFormat(CurrentFormatPreference),
+        FOnJobSubmitted::CreateSP(this, &SAIChatWindow::OnJobSubmitted));
 }
 
 void SAIChatWindow::OnJobSubmitted(bool bSuccess, const FString& JobIdOrError)
@@ -852,7 +677,6 @@ void SAIChatWindow::OnJobSubmitted(bool bSuccess, const FString& JobIdOrError)
         AddSystemMessage(FString::Printf(TEXT("任务提交成功！JobId: %s"), *JobIdOrError));
         UpdateProgress(CurrentTask);
 
-        // 开始轮询
         PollJobResult(JobIdOrError);
     }
     else
@@ -865,7 +689,8 @@ void SAIChatWindow::OnJobSubmitted(bool bSuccess, const FString& JobIdOrError)
 
 void SAIChatWindow::PollJobResult(const FString& JobId)
 {
-    FHunYuanAPI::Get()->QueryProJobResult(JobId,
+    FHunYuanAPI::Get()->QueryProJobResult(
+        JobId,
         FOnJobQueried::CreateSP(this, &SAIChatWindow::OnJobQueried));
 }
 
@@ -876,25 +701,24 @@ void SAIChatWindow::OnJobQueried(bool bSuccess, const TSharedPtr<FJsonObject>& R
         // 继续轮询
         if (CurrentTask.Status == Chat::EGenerationStatus::Waiting)
         {
-            TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);  // 先创建 WeakPtr
+            TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);
             FString JobId = CurrentTask.JobId;
 
             FTSTicker::GetCoreTicker().AddTicker(
-                FTickerDelegate::CreateLambda([WeakThisPtr, JobId = CurrentTask.JobId](float) -> bool
+                FTickerDelegate::CreateLambda([WeakThisPtr, JobId](float) -> bool
                     {
-                        auto SharedThis = WeakThisPtr.Pin();
-                        if (SharedThis.IsValid())
+                        if (auto SharedThis = WeakThisPtr.Pin())
                         {
                             SharedThis->PollJobResult(JobId);
                         }
                         return false;
                     }),
-                3.0f
-            );
+                3.0f);
         }
         return;
     }
 
+    // 解析JSON
     HunYuanAPI::FJobResult JobResult;
     if (!JobResult.ParseFromJson(Result))
     {
@@ -909,19 +733,96 @@ void SAIChatWindow::OnJobQueried(bool bSuccess, const TSharedPtr<FJsonObject>& R
         CurrentTask.Status = Chat::EGenerationStatus::Downloading;
         UpdateProgress(CurrentTask);
 
-        FString ModelUrl = JobResult.GetFirstModelUrl();
-        if (!ModelUrl.IsEmpty())
+        if (JobResult.ModelFiles.Num() > 0)
         {
-            AddSystemMessage(TEXT("模型生成成功，开始下载..."));
+            FString SelectedUrl;
+            FString SelectedFormat;
+            FString TargetFormat;
 
-            auto Config = FHunYuanConfigManager::Get()->GetConfig();
+            // 将用户偏好转换为目标格式字符串
+            switch (CurrentFormatPreference)
+            {
+            case EModelFormatPreference::Default: TargetFormat = TEXT("GLB"); break;
+            case EModelFormatPreference::GLB:     TargetFormat = TEXT("GLB"); break;
+            case EModelFormatPreference::OBJ:     TargetFormat = TEXT("OBJ"); break;
+            case EModelFormatPreference::STL:     TargetFormat = TEXT("STL"); break;
+            case EModelFormatPreference::USDZ:    TargetFormat = TEXT("USDZ"); break;
+            case EModelFormatPreference::FBX:     TargetFormat = TEXT("FBX"); break;
+            default:                              TargetFormat = TEXT("GLB"); break;
+            }
 
-            Downloader->AddDownload(
-                ModelUrl,
-                CurrentTask.JobId,
-                Config.DownloadDirectory,
-                FOnDownloadItemComplete::CreateSP(this, &SAIChatWindow::OnDownloadItemComplete)
-            );
+            // 查找用户指定的格式
+            SelectedUrl = JobResult.GetModelUrlByFormat(TargetFormat);
+
+            // 如果没找到，按优先级降级选择
+            if (SelectedUrl.IsEmpty())
+            {
+                TArray<FString> PriorityList;
+                if (TargetFormat == TEXT("FBX"))
+                {
+                    PriorityList = { TEXT("GLB"), TEXT("OBJ"), TEXT("STL"), TEXT("USDZ") };
+                }
+                else if (TargetFormat == TEXT("GLB"))
+                {
+                    PriorityList = { TEXT("OBJ"), TEXT("FBX"), TEXT("STL"), TEXT("USDZ") };
+                }
+                else if (TargetFormat == TEXT("OBJ"))
+                {
+                    PriorityList = { TEXT("GLB"), TEXT("FBX"), TEXT("STL"), TEXT("USDZ") };
+                }
+                else
+                {
+                    PriorityList = { TEXT("GLB"), TEXT("OBJ"), TEXT("FBX"), TEXT("STL"), TEXT("USDZ") };
+                }
+
+                for (const FString& Format : PriorityList)
+                {
+                    SelectedUrl = JobResult.GetModelUrlByFormat(Format);
+                    if (!SelectedUrl.IsEmpty())
+                    {
+                        SelectedFormat = Format;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                SelectedFormat = TargetFormat;
+            }
+
+            // 最后选择第一个可用格式
+            if (SelectedUrl.IsEmpty() && JobResult.ModelFiles.Num() > 0)
+            {
+                SelectedUrl = JobResult.ModelFiles[0].Url;
+                SelectedFormat = JobResult.ModelFiles[0].Format;
+            }
+
+            if (!SelectedUrl.IsEmpty())
+            {
+                TSharedPtr<IDownloadHandler> Handler = FDownloadHandlerFactory::GetHandler(SelectedUrl);
+
+                // 通知用户格式降级
+                if (SelectedFormat != TargetFormat)
+                {
+                    AddSystemMessage(FString::Printf(TEXT("选择的 %s 格式不可用，已自动降级为 %s 格式"),
+                        *TargetFormat, *SelectedFormat));
+                }
+
+                AddSystemMessage(FString::Printf(TEXT("模型生成成功，开始下载 %s 格式..."), *SelectedFormat));
+
+                auto Config = FHunYuanConfigManager::Get()->GetConfig();
+                Downloader->AddDownload(
+                    SelectedUrl,
+                    CurrentTask.JobId,
+                    Config.DownloadDirectory,
+                    Handler,
+                    FOnDownloadItemComplete::CreateSP(this, &SAIChatWindow::OnDownloadItemComplete));
+            }
+            else
+            {
+                AddErrorMessage(TEXT("未获取到模型下载地址"));
+                ClearProgress();
+            }
         }
         else
         {
@@ -937,22 +838,18 @@ void SAIChatWindow::OnJobQueried(bool bSuccess, const TSharedPtr<FJsonObject>& R
     }
     else if (JobResult.IsProcessing())
     {
-        TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);  // 先创建 WeakPtr
-        FString JobId = CurrentTask.JobId;
-
         // 继续轮询
+        TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);
         FTSTicker::GetCoreTicker().AddTicker(
-            FTickerDelegate::CreateLambda([WeakThisPtr, JobId](float) -> bool
+            FTickerDelegate::CreateLambda([WeakThisPtr, JobId = CurrentTask.JobId](float) -> bool
                 {
-                    auto SharedThis = WeakThisPtr.Pin();
-                    if (SharedThis.IsValid())
+                    if (auto SharedThis = WeakThisPtr.Pin())
                     {
                         SharedThis->PollJobResult(JobId);
                     }
                     return false;
                 }),
-            3.0f
-        );
+            3.0f);
     }
 }
 
@@ -964,120 +861,261 @@ void SAIChatWindow::OnDownloadProgress(const Download::FDownloadItem& Item)
     {
         CurrentTask.Status = Chat::EGenerationStatus::Downloading;
         CurrentTask.Progress = Item.Progress;
-        CurrentTask.StatusMessage = FString::Printf(TEXT("下载中 %.1f%% (%s/%s)"),
-            Item.Progress * 100.0f,
-            *Item.GetReceivedSizeString(),
-            *Item.GetTotalSizeString());
-
         UpdateProgress(CurrentTask);
     }
 }
 
-void SAIChatWindow::OnDownloadComplete(bool bSuccess, const FString& FilePath)
-{
-    // 这个回调会在下载完成时触发，但我们使用 OnDownloadItemComplete 来处理具体任务
-}
-
 void SAIChatWindow::OnDownloadItemComplete(const Download::FDownloadItem& Item)
 {
-    if (Item.JobId == CurrentTask.JobId)
-    {
-        if (Item.Status == Download::EDownloadStatus::Completed)
-        {
-            CurrentTask.Status = Chat::EGenerationStatus::Extracting;
-            UpdateProgress(CurrentTask);
+    if (Item.JobId != CurrentTask.JobId) return;
 
-            HandleDownloadedFile(Item.DestinationPath, Item.JobId);
-        }
-        else
-        {
-            CurrentTask.Status = Chat::EGenerationStatus::Failed;
-            AddErrorMessage(TEXT("下载失败: ") + Item.ErrorMessage);
-            ClearProgress();
-        }
+    if (Item.Status == Download::EDownloadStatus::Completed)
+    {
+        TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);
+
+        // 获取 Handler（已在工厂中初始化）
+        TSharedPtr<IDownloadHandler> Handler = FDownloadHandlerFactory::GetHandler(Item.URL);
+
+        Async(EAsyncExecution::ThreadPool, [WeakThisPtr, FilePath = Item.DestinationPath,
+            JobId = Item.JobId, Handler]()
+            {
+                if (!WeakThisPtr.IsValid()) return;
+
+                FModelInfo NewInfo;
+                bool bSuccess = false;
+
+                // 使用 Handler 处理文件
+                if (Handler.IsValid())
+                {
+                    UE_LOG(LogHunYuanDownload, Log, TEXT("Processing with handler: %s"), *Handler->GetFormatName());
+                    bSuccess = Handler->ProcessDownloadedFile(FilePath, JobId, NewInfo);
+                }
+                else
+                {
+                    // 降级处理：直接使用默认逻辑
+                    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+                    if (PlatformFile.FileExists(*FilePath))
+                    {
+                        NewInfo.FilePath = FilePath;
+                        NewInfo.FileName = FPaths::GetCleanFilename(FilePath);
+                        NewInfo.Format = FPaths::GetExtension(FilePath).ToUpper();
+                        NewInfo.FileSize = PlatformFile.FileSize(*FilePath);
+                        NewInfo.JobId = JobId;
+                        bSuccess = true;
+                    }
+                }
+
+                AsyncTask(ENamedThreads::GameThread, [WeakThisPtr, NewInfo, bSuccess]()
+                    {
+                        if (auto SharedThis = WeakThisPtr.Pin())
+                        {
+                            SharedThis->FinishDownloadProcessing(NewInfo, bSuccess);
+                        }
+                    });
+            });
+    }
+    else
+    {
+        // 错误处理保持不变
+        TWeakPtr<SAIChatWindow> WeakThisPtr = SharedThis(this);
+        AsyncTask(ENamedThreads::GameThread, [WeakThisPtr, Item]()
+            {
+                if (auto SharedThis = WeakThisPtr.Pin())
+                {
+                    SharedThis->CurrentTask.Status = Chat::EGenerationStatus::Failed;
+                    SharedThis->AddErrorMessage(TEXT("下载失败: ") + Item.ErrorMessage);
+                    SharedThis->ClearProgress();
+                }
+            });
+    }
+}
+
+void SAIChatWindow::FinishDownloadProcessing(const FModelInfo& ModelInfo, bool bSuccess)
+{
+    if (!bSuccess)
+    {
+        AddErrorMessage(TEXT("文件处理失败"));
+        ClearProgress();
+        return;
+    }
+
+    AddToHistory(ModelInfo);
+
+    CurrentTask.Status = Chat::EGenerationStatus::Completed;
+    CurrentTask.EndTime = FDateTime::Now();
+
+    AddSystemMessage(FString::Printf(TEXT("生成完成！耗时: %.1f秒"), CurrentTask.GetElapsedTime()));
+    ClearProgress();
+
+    auto Config = FHunYuanConfigManager::Get()->GetConfig();
+
+    if (Config.bShowPreviewAfterDownload)
+    {
+        ShowModelPreview(ModelInfo);
+    }
+
+    if (Config.bAutoImport)
+    {
+        FTSTicker::GetCoreTicker().AddTicker(
+            FTickerDelegate::CreateLambda([this, ModelInfo](float) -> bool
+                {
+                    ImportModel(ModelInfo);
+                    return false;
+                }),
+            0.1f);
     }
 }
 
 void SAIChatWindow::HandleDownloadedFile(const FString& FilePath, const FString& JobId)
 {
-    FString FinalModelPath = FilePath;
-    bool bIsZipFile = FZipExtractor::IsZipFile(FilePath);
-
-    // 如果是ZIP文件，自动解压
-    if (bIsZipFile)
-    {
-        AddSystemMessage(TEXT("检测到ZIP文件，正在自动解压..."));
-
-        FString ModelDir;
-        if (FZipExtractor::ExtractModelFromZip(FilePath, ModelDir))
-        {
-            FinalModelPath = ModelDir;
-            AddSystemMessage(FString::Printf(TEXT("解压成功，找到模型: %s"),
-                *FPaths::GetCleanFilename(FinalModelPath)));
-        }
-        else
-        {
-            AddErrorMessage(TEXT("解压失败，请检查ZIP文件"));
-            ClearProgress();
-            return;
-        }
-    }
-
-    // 创建模型信息
-    FModelInfo NewInfo;
-    NewInfo.FilePath = FinalModelPath;
-    NewInfo.FileName = FPaths::GetCleanFilename(FinalModelPath);
-    NewInfo.JobId = JobId;
-    NewInfo.URL = CurrentTask.ImagePath.IsEmpty() ? CurrentTask.Prompt : CurrentTask.ImagePath;
-    NewInfo.DownloadTime = FDateTime::Now();
-
-    // 获取目录大小（所有文件总和）
-    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-    int64 TotalSize = 0;
-    TArray<FString> AllFiles;
-    PlatformFile.FindFilesRecursively(AllFiles, *FinalModelPath, TEXT("*"));
-    for (const FString& File : AllFiles)
-    {
-        TotalSize += PlatformFile.FileSize(*File);
-    }
-    NewInfo.FileSize = TotalSize;
-
-    // 添加到历史
-    AddToHistory(NewInfo);
-
-    // 任务完成
-    CurrentTask.Status = Chat::EGenerationStatus::Completed;
-    CurrentTask.EndTime = FDateTime::Now();
-
-    AddSystemMessage(FString::Printf(TEXT("生成完成！耗时: %.1f秒"), CurrentTask.GetElapsedTime()));
-
-    // 清除进度显示
-    ClearProgress();
-
-    // 显示预览窗口
-    auto Config = FHunYuanConfigManager::Get()->GetConfig();
-    if (Config.bShowPreviewAfterDownload)
-    {
-        ShowModelPreview(NewInfo);
-    }
-
-    // 自动导入
-    if (Config.bAutoImport)
-    {
-        ImportModelFromFolder(NewInfo);
-    }
+    // 此函数已被 FinishDownloadProcessing 替代，保留以防其他地方调用
 }
 
 // ==================== 模型处理 ====================
 
+void SAIChatWindow::ImportModel(const FModelInfo& ModelInfo)
+{
+    FString TargetPath = FPaths::ConvertRelativePathToFull(ModelInfo.FilePath).Replace(TEXT("\\"), TEXT("/"));
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+
+    FString ImportSourcePath;
+    FString DestinationSubPath;
+    bool bIsZipBased = false;
+    FString Format = ModelInfo.Format.IsEmpty() ? FPaths::GetExtension(ModelInfo.FileName).ToUpper() : ModelInfo.Format;
+
+    // 根据格式处理
+    if (Format == TEXT("OBJ") || Format == TEXT("ZIP") || TargetPath.EndsWith(TEXT(".zip"), ESearchCase::IgnoreCase))
+    {
+        // OBJ/ZIP 格式
+        bIsZipBased = true;
+
+        if (PlatformFile.FileExists(*TargetPath) && TargetPath.EndsWith(TEXT(".zip"), ESearchCase::IgnoreCase))
+        {
+            ImportSourcePath = FPaths::GetPath(TargetPath) / FPaths::GetBaseFilename(TargetPath);
+            ImportSourcePath = ImportSourcePath.Replace(TEXT("\\"), TEXT("/"));
+        }
+        else if (PlatformFile.DirectoryExists(*TargetPath))
+        {
+            ImportSourcePath = TargetPath;
+        }
+        else
+        {
+            ShowImportErrorNotification(TEXT("无效的OBJ/ZIP路径"));
+            return;
+        }
+
+        if (!PlatformFile.DirectoryExists(*ImportSourcePath))
+        {
+            ShowImportErrorNotification(TEXT("解压目录不存在"));
+            return;
+        }
+
+        // 查找OBJ文件
+        TArray<FString> FoundFiles;
+        PlatformFile.FindFilesRecursively(FoundFiles, *ImportSourcePath, TEXT("*.obj"));
+        if (FoundFiles.Num() == 0)
+        {
+            PlatformFile.FindFilesRecursively(FoundFiles, *ImportSourcePath, TEXT("*.OBJ"));
+        }
+
+        if (FoundFiles.Num() > 0)
+        {
+            ImportSourcePath = FPaths::GetPath(FoundFiles[0]);
+        }
+        else
+        {
+            ShowImportErrorNotification(TEXT("未找到OBJ文件"));
+            return;
+        }
+
+        DestinationSubPath = FPaths::GetBaseFilename(ModelInfo.FileName);
+    }
+    else if (Format == TEXT("FBX") || Format == TEXT("GLB") || Format == TEXT("GLTF") ||
+        Format == TEXT("STL") || Format == TEXT("USDZ"))
+    {
+        // 单文件格式
+        bIsZipBased = false;
+
+        if (!PlatformFile.FileExists(*TargetPath))
+        {
+            ShowImportErrorNotification(TEXT("文件不存在"));
+            return;
+        }
+
+        ImportSourcePath = TargetPath;
+    }
+    else
+    {
+        ShowImportErrorNotification(FString::Printf(TEXT("不支持的格式: %s"), *Format));
+        return;
+    }
+
+    // 调用导入管理器
+    auto LocalImportManager = FModelImportManager::Get();
+    if (LocalImportManager.IsValid())
+    {
+        LocalImportManager->OnModelImported.AddSP(this, &SAIChatWindow::HandleModelImported);
+
+        FString DestinationPath = bIsZipBased
+            ? FString::Printf(TEXT("/Game/HunyuanImports/%s/"), *DestinationSubPath)
+            : TEXT("/Game/HunyuanImports/");
+
+        bool bSuccess = false;
+
+        if (bIsZipBased)
+        {
+            bSuccess = LocalImportManager->ImportModelFromFolder(ImportSourcePath, DestinationPath);
+        }
+        else
+        {
+            TArray<UObject*> ImportedAssets;
+            bSuccess = (LocalImportManager->ImportModelInternal(ImportSourcePath, DestinationPath, ImportedAssets) == EModelImportResult::Success);
+
+            if (bSuccess && ImportedAssets.Num() > 0)
+            {
+                FString FinalAssetPath = DestinationPath + FPaths::GetBaseFilename(ModelInfo.FileName);
+                HandleModelImported(true, FinalAssetPath);
+            }
+            else
+            {
+                HandleModelImported(false, FString());
+            }
+        }
+
+        if (bSuccess)
+        {
+            FSlateNotificationManager::Get().AddNotification(FNotificationInfo(
+                FText::Format(NSLOCTEXT("AIChat", "ImportStarted", "开始导入模型: {0}"),
+                    FText::FromString(ModelInfo.FileName))));
+
+            if (ModelInfoWindow.IsValid())
+            {
+                ModelInfoWindow->RequestDestroyWindow();
+                ModelInfoWindow.Reset();
+            }
+        }
+    }
+    else
+    {
+        ShowImportErrorNotification(TEXT("导入管理器初始化失败"));
+    }
+}
+
+void SAIChatWindow::ShowImportErrorNotification(const FString& ErrorMessage)
+{
+    FNotificationInfo Info(FText::Format(
+        NSLOCTEXT("AIChat", "ImportError", "导入失败: {0}"),
+        FText::FromString(ErrorMessage)));
+    Info.ExpireDuration = 3.0f;
+    Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
+    FSlateNotificationManager::Get().AddNotification(Info);
+}
+
 void SAIChatWindow::ShowModelPreview(const FModelInfo& ModelInfo)
 {
-    UE_LOG(LogHunYuanAI, Log, TEXT("ShowModelPreview called for: %s"), *ModelInfo.FileName);
-
     // 确保在游戏线程
     if (!IsInGameThread())
     {
-        UE_LOG(LogHunYuanAI, Warning, TEXT("ShowModelPreview called from non-game thread, dispatching to game thread"));
         AsyncTask(ENamedThreads::GameThread, [this, ModelInfo]()
             {
                 ShowModelPreview(ModelInfo);
@@ -1085,27 +1123,18 @@ void SAIChatWindow::ShowModelPreview(const FModelInfo& ModelInfo)
         return;
     }
 
-    // 如果已经有窗口，先关闭
     if (ModelInfoWindow.IsValid())
     {
-        UE_LOG(LogHunYuanAI, Log, TEXT("Closing existing preview window"));
         ModelInfoWindow->RequestDestroyWindow();
-        ModelInfoWindow.Reset();
     }
 
-    // 检查 Slate 应用程序是否初始化
     if (!FSlateApplication::IsInitialized())
     {
-        UE_LOG(LogHunYuanAI, Error, TEXT("FSlateApplication is not initialized"));
         return;
     }
 
-    UE_LOG(LogHunYuanAI, Log, TEXT("Creating new preview window"));
-
-    // 创建新的窗口
     ModelInfoWindow = SNew(SWindow)
-        .Title(FText::Format(LOCTEXT("ModelPreview", "模型预览 - {0}"),
-            FText::FromString(ModelInfo.FileName)))
+        .Title(FText::Format(LOCTEXT("ModelPreview", "模型预览 - {0}"), FText::FromString(ModelInfo.FileName)))
         .ClientSize(FVector2D(600, 500))
         .SupportsMaximize(false)
         .SupportsMinimize(false)
@@ -1117,348 +1146,128 @@ void SAIChatWindow::ShowModelPreview(const FModelInfo& ModelInfo)
 
     if (!ModelInfoWindow.IsValid())
     {
-        UE_LOG(LogHunYuanAI, Error, TEXT("Failed to create SWindow"));
         return;
     }
 
-    // 创建模型信息控件
-    TSharedRef<SModelInfoWidget> ModelInfoWidget = SNew(SModelInfoWidget)
+    ModelInfoWindow->SetContent(
+        SNew(SModelInfoWidget)
         .ModelInfo(ModelInfo)
-        .OnImportClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::ImportModelFromFolder))
+        .OnImportClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::ImportModel))
         .OnPreviewClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::PreviewModel))
         .OnDeleteClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::DeleteModelFile))
-        .OnOpenFolderClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::OpenModelFolder));
+        .OnOpenFolderClicked(FOnModelAction::CreateSP(this, &SAIChatWindow::OpenModelFolder)));
 
-    // 设置窗口内容
-    ModelInfoWindow->SetContent(ModelInfoWidget);
-
-    // 将窗口添加到 Slate 应用程序
     FSlateApplication::Get().AddWindow(ModelInfoWindow.ToSharedRef());
-
-    UE_LOG(LogHunYuanAI, Log, TEXT("Preview window created successfully"));
 }
 
-// 导入模型
-void SAIChatWindow::ImportModelFromFolder(const FModelInfo& ModelInfo)
-{
-    UE_LOG(LogTemp, Log, TEXT("ImportModelFromFolder called for: %s"), *ModelInfo.FileName);
-    UE_LOG(LogTemp, Log, TEXT("Original File Path: %s"), *ModelInfo.FilePath);
-
-    // 检查原始文件是否存在（压缩包）
-    if (!ModelInfo.IsFileExists())
-    {
-        UE_LOG(LogTemp, Error, TEXT("Original file does not exist: %s"), *ModelInfo.FilePath);
-
-        FNotificationInfo Info(FText::Format(
-            NSLOCTEXT("AIChat", "FileNotFound", "文件不存在: {0}"),
-            FText::FromString(ModelInfo.FileName)
-        ));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
-        return;
-    }
-
-    // 获取解压后的文件夹路径
-    FString FolderPath = FPaths::GetPath(ModelInfo.FilePath);  // 获取 Downloads 目录
-    FString BaseFilename = FPaths::GetBaseFilename(ModelInfo.FilePath);  // 获取不带扩展名的文件名
-    FString ExtractedFolderPath = FolderPath / BaseFilename;  // 组合成解压文件夹路径
-
-    UE_LOG(LogTemp, Log, TEXT("Looking for extracted folder: %s"), *ExtractedFolderPath);
-
-    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-
-    // 检查解压后的文件夹是否存在
-    if (!PlatformFile.DirectoryExists(*ExtractedFolderPath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Extracted folder does not exist: %s"), *ExtractedFolderPath);
-
-        FNotificationInfo Info(FText::Format(
-            NSLOCTEXT("AIChat", "FolderNotFound", "解压文件夹不存在: {0}"),
-            FText::FromString(BaseFilename)
-        ));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
-        return;
-    }
-
-    // 在解压文件夹中查找 OBJ 文件
-    TArray<FString> FoundFiles;
-    PlatformFile.FindFiles(FoundFiles, *ExtractedFolderPath, TEXT("*.obj"));
-
-    if (FoundFiles.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("No OBJ file found in extracted folder: %s"), *ExtractedFolderPath);
-
-        FNotificationInfo Info(NSLOCTEXT("AIChat", "NoObjFile", "解压文件夹中未找到OBJ文件"));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
-        return;
-    }
-
-    // 使用找到的第一个 OBJ 文件
-    FString ObjFilePath = FoundFiles[0];
-    FString ObjFileName = FPaths::GetCleanFilename(ObjFilePath);
-
-    UE_LOG(LogTemp, Log, TEXT("Found OBJ file: %s"), *ObjFileName);
-    UE_LOG(LogTemp, Log, TEXT("Full OBJ path: %s"), *ObjFilePath);
-    UE_LOG(LogTemp, Log, TEXT("Importing folder: %s"), *ExtractedFolderPath);
-
-    // 调用导入管理器
-    auto LocalImportManager = FModelImportManager::Get();
-    if (LocalImportManager.IsValid())
-    {
-        // 绑定导入完成事件
-        LocalImportManager->OnModelImported.AddSP(this, &SAIChatWindow::HandleModelImported);
-
-        // 使用解压文件夹名作为目标子文件夹名
-        FString DestinationPath = TEXT("/Game/HunyuanImports/") + BaseFilename + TEXT("/");
-
-        UE_LOG(LogTemp, Log, TEXT("Destination Path: %s"), *DestinationPath);
-
-        // 传入解压文件夹路径
-        bool bSuccess = LocalImportManager->ImportModelFromFolder(ExtractedFolderPath, DestinationPath);
-
-        if (bSuccess)
-        {
-            UE_LOG(LogTemp, Log, TEXT("Import started successfully"));
-
-            FNotificationInfo Info(FText::Format(
-                NSLOCTEXT("AIChat", "ImportStarted", "开始导入模型: {0}"),
-                FText::FromString(ObjFileName)
-            ));
-            Info.ExpireDuration = 2.0f;
-            FSlateNotificationManager::Get().AddNotification(Info);
-
-            // 可以选择关闭窗口
-            if (ModelInfoWindow.IsValid())
-            {
-                ModelInfoWindow->RequestDestroyWindow();
-                ModelInfoWindow.Reset();
-            }
-        }
-        else
-        {
-            UE_LOG(LogTemp, Error, TEXT("Failed to start import"));
-
-            FNotificationInfo Info(NSLOCTEXT("AIChat", "ImportStartFailed", "导入启动失败"));
-            Info.ExpireDuration = 3.0f;
-            Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-            FSlateNotificationManager::Get().AddNotification(Info);
-        }
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("ImportManager is not valid"));
-
-        FNotificationInfo Info(NSLOCTEXT("AIChat", "ImportManagerError", "导入管理器初始化失败"));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
-    }
-}
-
-// 预览模型
 void SAIChatWindow::PreviewModel(const FModelInfo& ModelInfo)
 {
-    UE_LOG(LogTemp, Log, TEXT("PreviewModel called for: %s"), *ModelInfo.FileName);
-    
-    // TODO: 实现模型预览逻辑
-    // 可以打开一个3D预览窗口
-    
-    FNotificationInfo Info(FText::Format(
-        NSLOCTEXT("AIChat", "PreviewNotImplemented", "预览功能开发中: {0}"),
-        FText::FromString(ModelInfo.FileName)
-    ));
-    Info.ExpireDuration = 2.0f;
-    FSlateNotificationManager::Get().AddNotification(Info);
+    FSlateNotificationManager::Get().AddNotification(FNotificationInfo(
+        FText::Format(NSLOCTEXT("AIChat", "PreviewNotImplemented", "预览功能开发中: {0}"),
+            FText::FromString(ModelInfo.FileName))));
 }
 
-// 删除模型文件
 void SAIChatWindow::DeleteModelFile(const FModelInfo& ModelInfo)
 {
-    UE_LOG(LogTemp, Log, TEXT("DeleteModelFile called for: %s"), *ModelInfo.FileName);
-    UE_LOG(LogTemp, Log, TEXT("File Path: %s"), *ModelInfo.FilePath);
-
     // 确认对话框
-    FText DialogText = FText::Format(
-        NSLOCTEXT("AIChat", "ConfirmDelete", "确定要删除模型 \"{0}\" 吗？\n\n文件: {1}\n大小: {2}\n\n此操作不可撤销！"),
-        FText::FromString(ModelInfo.FileName),
-        FText::FromString(ModelInfo.FilePath),
-        FText::FromString(ModelInfo.GetFileSizeString())
-    );
-
-    EAppReturnType::Type Result = FMessageDialog::Open(EAppMsgType::YesNo, DialogText);
-    
-    if (Result == EAppReturnType::Yes)
+    if (FMessageDialog::Open(EAppMsgType::YesNo,
+        FText::Format(NSLOCTEXT("AIChat", "ConfirmDelete",
+            "确定要删除模型 \"{0}\" 吗？\n\n文件: {1}\n大小: {2}\n\n此操作不可撤销！"),
+            FText::FromString(ModelInfo.FileName),
+            FText::FromString(ModelInfo.FilePath),
+            FText::FromString(ModelInfo.GetFileSizeString()))) != EAppReturnType::Yes)
     {
-        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-        bool bDeleted = false;
-        
-        // 删除主文件
-        if (PlatformFile.FileExists(*ModelInfo.FilePath))
-        {
-            bDeleted = PlatformFile.DeleteFile(*ModelInfo.FilePath);
-            UE_LOG(LogTemp, Log, TEXT("Deleted file: %s"), *ModelInfo.FilePath);
-        }
-        
-        // 删除同名的 MTL 和纹理文件
-        if (bDeleted)
-        {
-            FString FolderPath = FPaths::GetPath(ModelInfo.FilePath);
-            FString BaseFilename = FPaths::GetBaseFilename(ModelInfo.FilePath);
-            
-            // 删除 MTL 文件
-            FString MtlPath = FolderPath / BaseFilename + TEXT(".mtl");
-            if (PlatformFile.FileExists(*MtlPath))
-            {
-                PlatformFile.DeleteFile(*MtlPath);
-                UE_LOG(LogTemp, Log, TEXT("Deleted MTL file: %s"), *MtlPath);
-            }
-            
-            // 删除纹理文件
-            TArray<FString> TextureExtensions = { TEXT(".png"), TEXT(".jpg"), TEXT(".jpeg"), TEXT(".tga"), TEXT(".bmp"), TEXT(".dds") };
-            for (const FString& Ext : TextureExtensions)
-            {
-                FString TexturePath = FolderPath / BaseFilename + Ext;
-                if (PlatformFile.FileExists(*TexturePath))
-                {
-                    PlatformFile.DeleteFile(*TexturePath);
-                    UE_LOG(LogTemp, Log, TEXT("Deleted texture file: %s"), *TexturePath);
-                    break;
-                }
-            }
-        }
-        
-        if (bDeleted)
-        {
-            FNotificationInfo Info(FText::Format(
-                NSLOCTEXT("AIChat", "DeleteSuccess", "已删除: {0}"),
-                FText::FromString(ModelInfo.FileName)
-            ));
-            Info.ExpireDuration = 3.0f;
-            FSlateNotificationManager::Get().AddNotification(Info);
-            
-            // 刷新模型列表
-            RefreshModelList();
-            
-            // 关闭窗口
-            if (ModelInfoWindow.IsValid())
-            {
-                ModelInfoWindow->RequestDestroyWindow();
-                ModelInfoWindow.Reset();
-            }
-        }
-        else
-        {
-            FNotificationInfo Info(FText::Format(
-                NSLOCTEXT("AIChat", "DeleteFailed", "删除失败: {0}"),
-                FText::FromString(ModelInfo.FileName)
-            ));
-            Info.ExpireDuration = 3.0f;
-            Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-            FSlateNotificationManager::Get().AddNotification(Info);
-        }
-    }
-}
-
-// 打开模型所在文件夹
-void SAIChatWindow::OpenModelFolder(const FModelInfo& ModelInfo)
-{
-    UE_LOG(LogTemp, Log, TEXT("OpenModelFolder called for: %s"), *ModelInfo.FileName);
-    UE_LOG(LogTemp, Log, TEXT("Original File Path: %s"), *ModelInfo.FilePath);
-
-    // 获取解压后的文件夹路径
-    // 假设压缩包路径如：.../Downloads/xxx.zip
-    // 解压后文件夹应该是：.../Downloads/xxx（去掉.zip）
-    FString FolderPath = FPaths::GetPath(ModelInfo.FilePath);  // 获取 Downloads 目录
-    FString BaseFilename = FPaths::GetBaseFilename(ModelInfo.FilePath);  // 获取不带扩展名的文件名
-    FString ExtractedFolderPath = FolderPath / BaseFilename;  // 组合成解压文件夹路径
-
-    UE_LOG(LogTemp, Log, TEXT("Looking for extracted folder: %s"), *ExtractedFolderPath);
-
-    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-
-    // 先检查解压后的文件夹是否存在
-    if (PlatformFile.DirectoryExists(*ExtractedFolderPath))
-    {
-        UE_LOG(LogTemp, Log, TEXT("Found extracted folder, opening: %s"), *ExtractedFolderPath);
-        FPlatformProcess::ExploreFolder(*ExtractedFolderPath);
         return;
     }
 
-    // 如果解压文件夹不存在，回退到原始文件所在目录
-    FString DirectoryPath = FPaths::GetPath(ModelInfo.FilePath);
-    if (PlatformFile.DirectoryExists(*DirectoryPath))
-    {
-        UE_LOG(LogTemp, Log, TEXT("Extracted folder not found, opening parent directory: %s"), *DirectoryPath);
-        FPlatformProcess::ExploreFolder(*DirectoryPath);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("Neither extracted folder nor parent directory exists"));
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    bool bDeleted = false;
 
-        FNotificationInfo Info(FText::Format(
-            NSLOCTEXT("AIChat", "FolderNotFound", "文件夹不存在: {0}"),
-            FText::FromString(ModelInfo.FileName)
-        ));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
+    if (PlatformFile.FileExists(*ModelInfo.FilePath))
+    {
+        bDeleted = PlatformFile.DeleteFile(*ModelInfo.FilePath);
+    }
+
+    if (bDeleted)
+    {
+        FString FolderPath = FPaths::GetPath(ModelInfo.FilePath);
+        FString BaseFilename = FPaths::GetBaseFilename(ModelInfo.FilePath);
+
+        // 删除 MTL 文件
+        FString MtlPath = FolderPath / BaseFilename + TEXT(".mtl");
+        if (PlatformFile.FileExists(*MtlPath))
+        {
+            PlatformFile.DeleteFile(*MtlPath);
+        }
+
+        // 删除纹理文件
+        TArray<FString> TextureExtensions = { TEXT(".png"), TEXT(".jpg"), TEXT(".jpeg"), TEXT(".tga"), TEXT(".bmp"), TEXT(".dds") };
+        for (const FString& Ext : TextureExtensions)
+        {
+            FString TexturePath = FolderPath / BaseFilename + Ext;
+            if (PlatformFile.FileExists(*TexturePath))
+            {
+                PlatformFile.DeleteFile(*TexturePath);
+                break;
+            }
+        }
+
+        FSlateNotificationManager::Get().AddNotification(FNotificationInfo(
+            FText::Format(NSLOCTEXT("AIChat", "DeleteSuccess", "已删除: {0}"),
+                FText::FromString(ModelInfo.FileName))));
+
+        RefreshModelList();
+
+        if (ModelInfoWindow.IsValid())
+        {
+            ModelInfoWindow->RequestDestroyWindow();
+            ModelInfoWindow.Reset();
+        }
     }
 }
 
-// 处理导入结果
+void SAIChatWindow::OpenModelFolder(const FModelInfo& ModelInfo)
+{
+    FString FolderPath = FPaths::GetPath(ModelInfo.FilePath);
+    FString ExtractedFolderPath = FolderPath / FPaths::GetBaseFilename(ModelInfo.FilePath);
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+
+    if (PlatformFile.DirectoryExists(*ExtractedFolderPath))
+    {
+        FPlatformProcess::ExploreFolder(*ExtractedFolderPath);
+    }
+    else if (PlatformFile.DirectoryExists(*FolderPath))
+    {
+        FPlatformProcess::ExploreFolder(*FolderPath);
+    }
+    else
+    {
+        FSlateNotificationManager::Get().AddNotification(FNotificationInfo(
+            FText::Format(NSLOCTEXT("AIChat", "FolderNotFound", "文件夹不存在: {0}"),
+                FText::FromString(ModelInfo.FileName))));
+    }
+}
+
 void SAIChatWindow::HandleModelImported(bool bSuccess, const FString& AssetPath)
 {
     if (bSuccess)
     {
-        UE_LOG(LogTemp, Log, TEXT("Model imported successfully: %s"), *AssetPath);
+        FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+        TArray<FAssetData> Assets;
+        AssetRegistryModule.Get().GetAssetsByPath(FName(*AssetPath), Assets, true);
 
-        FNotificationInfo Info(FText::Format(
-            NSLOCTEXT("AIChat", "ImportSuccess", "模型导入成功: {0}"),
-            FText::FromString(FPaths::GetBaseFilename(AssetPath))
-        ));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Note"));
-        FSlateNotificationManager::Get().AddNotification(Info);
+        FSlateNotificationManager::Get().AddNotification(FNotificationInfo(
+            FText::Format(NSLOCTEXT("AIChat", "ImportSuccess", "模型导入成功: {0} (已导入 {1} 个资产)"),
+                FText::FromString(FPaths::GetBaseFilename(AssetPath)),
+                FText::AsNumber(Assets.Num()))));
 
-        // 刷新模型列表
         RefreshModelList();
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("Model import failed"));
-
-        FNotificationInfo Info(NSLOCTEXT("AIChat", "ImportFailed", "模型导入失败"));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FCoreStyle::Get().GetBrush(TEXT("MessageLog.Error"));
-        FSlateNotificationManager::Get().AddNotification(Info);
     }
 }
 
-// 刷新模型列表
 void SAIChatWindow::RefreshModelList()
 {
-    UE_LOG(LogTemp, Log, TEXT("Refreshing model list"));
-
-    // TODO: 根据您的UI实现刷新逻辑
-    // 例如，如果您有一个列表视图：
-    /*
-    if (ModelListView.IsValid())
-    {
-        ModelListView->RebuildList();
-        ModelListView->RequestListRefresh();
-    }
-    */
-
-    // 或者重新扫描文件夹并更新数据源
-    /*
-    TArray<FModelInfo> UpdatedModels = ScanForModelFiles();
-    UpdateModelList(UpdatedModels);
-    */
+    // TODO: 实现模型列表刷新逻辑
 }
 
 // ==================== 历史管理 ====================
@@ -1466,31 +1275,18 @@ void SAIChatWindow::RefreshModelList()
 void SAIChatWindow::LoadDownloadHistory()
 {
     const FString HistoryFile = FPaths::ProjectSavedDir() / TEXT("HunYuanAI/DownloadHistory.json");
-
-    if (!FPaths::FileExists(HistoryFile))
-    {
-        return;
-    }
+    if (!FPaths::FileExists(HistoryFile)) return;
 
     FString JsonString;
-    if (!FFileHelper::LoadFileToString(JsonString, *HistoryFile))
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to load download history"));
-        return;
-    }
+    if (!FFileHelper::LoadFileToString(JsonString, *HistoryFile)) return;
 
     TSharedPtr<FJsonObject> JsonObject;
     TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
-
-    if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
-    {
-        UE_LOG(LogHunYuanUI, Error, TEXT("Failed to parse download history"));
-        return;
-    }
+    if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid()) return;
 
     DownloadHistory.Empty();
-
     const TArray<TSharedPtr<FJsonValue>>* HistoryArray;
+
     if (JsonObject->TryGetArrayField(TEXT("History"), HistoryArray))
     {
         for (const auto& Item : *HistoryArray)
@@ -1505,11 +1301,8 @@ void SAIChatWindow::LoadDownloadHistory()
                 Info.URL = ItemObject->GetStringField(TEXT("URL"));
                 Info.Format = ItemObject->GetStringField(TEXT("Format"));
                 Info.FileSize = static_cast<int64>(ItemObject->GetNumberField(TEXT("FileSize")));
+                FDateTime::Parse(ItemObject->GetStringField(TEXT("DownloadTime")), Info.DownloadTime);
 
-                FString TimeString = ItemObject->GetStringField(TEXT("DownloadTime"));
-                FDateTime::Parse(TimeString, Info.DownloadTime);
-
-                // 检查文件是否仍然存在
                 if (FPaths::FileExists(Info.FilePath))
                 {
                     DownloadHistory.Add(Info);
@@ -1517,17 +1310,14 @@ void SAIChatWindow::LoadDownloadHistory()
             }
         }
     }
-
-    UE_LOG(LogHunYuanUI, Log, TEXT("Loaded %d download history records"), DownloadHistory.Num());
 }
 
 void SAIChatWindow::SaveDownloadHistory()
 {
     const FString HistoryFile = FPaths::ProjectSavedDir() / TEXT("HunYuanAI/DownloadHistory.json");
-
-    // 确保目录存在
     IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
     FString HistoryDir = FPaths::GetPath(HistoryFile);
+
     if (!PlatformFile.DirectoryExists(*HistoryDir))
     {
         PlatformFile.CreateDirectoryTree(*HistoryDir);
@@ -1546,7 +1336,6 @@ void SAIChatWindow::SaveDownloadHistory()
         ItemObject->SetStringField(TEXT("Format"), Info.Format);
         ItemObject->SetNumberField(TEXT("FileSize"), Info.FileSize);
         ItemObject->SetStringField(TEXT("DownloadTime"), Info.DownloadTime.ToString());
-
         HistoryArray.Add(MakeShareable(new FJsonValueObject(ItemObject)));
     }
 
@@ -1554,10 +1343,10 @@ void SAIChatWindow::SaveDownloadHistory()
 
     FString JsonString;
     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonString);
+
     if (FJsonSerializer::Serialize(RootObject.ToSharedRef(), Writer))
     {
         FFileHelper::SaveStringToFile(JsonString, *HistoryFile);
-        UE_LOG(LogHunYuanUI, Log, TEXT("Saved %d download history records"), DownloadHistory.Num());
     }
 }
 
@@ -1567,7 +1356,7 @@ void SAIChatWindow::AddToHistory(const FModelInfo& ModelInfo)
     SaveDownloadHistory();
 }
 
-// ==================== UI 状态更新 ====================
+// ==================== UI状态更新 ====================
 
 void SAIChatWindow::UpdateProgress(const Chat::FGenerationTask& Task)
 {
@@ -1598,12 +1387,9 @@ void SAIChatWindow::ClearProgress()
 
 TOptional<float> SAIChatWindow::GetProgressPercent() const
 {
-    if (CurrentTask.Status == Chat::EGenerationStatus::Waiting)
-    {
-        // 等待状态显示不确定进度
-        return TOptional<float>();
-    }
-    return CurrentTask.Progress;
+    return (CurrentTask.Status == Chat::EGenerationStatus::Waiting)
+        ? TOptional<float>()
+        : CurrentTask.Progress;
 }
 
 FReply SAIChatWindow::OnSelectDownloadDirectoryClicked()
@@ -1616,74 +1402,459 @@ FReply SAIChatWindow::OnSelectDownloadDirectoryClicked()
             FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
             TEXT("选择下载目录"),
             FHunYuanConfigManager::Get()->GetConfig().DownloadDirectory,
-            OutFolder))
+            OutFolder) && !OutFolder.IsEmpty())
         {
-            if (!OutFolder.IsEmpty())
-            {
-                auto Config = FHunYuanConfigManager::Get()->GetConfig();
-                Config.DownloadDirectory = OutFolder;
-                FHunYuanConfigManager::Get()->UpdateConfig(Config);
-            }
+            auto Config = FHunYuanConfigManager::Get()->GetConfig();
+            Config.DownloadDirectory = OutFolder;
+            FHunYuanConfigManager::Get()->UpdateConfig(Config);
         }
     }
     return FReply::Handled();
 }
 
-// ==================== 配置管理辅助函数 ====================
+// ==================== 知识图谱搜索集成 ====================
 
-void SAIChatWindow::OnRememberPasswordCheckStateChanged(ECheckBoxState NewState)
+void SAIChatWindow::AddKnowledgeGraphSearchPanel()
 {
-    bool bRemember = (NewState == ECheckBoxState::Checked);
+    // 创建知识图谱搜索组件
+    KnowledgeGraphSearch = SNew(SKnowledgeGraphSearchWidget)
+        .OnDocumentSelected(FOnDocumentSelected::CreateSP(this, &SAIChatWindow::OnSearchResultSelected));
 
-    // 获取当前配置
-    auto ConfigManager = FHunYuanConfigManager::Get();
-    auto Config = ConfigManager->GetConfig();
+    // 创建参考面板
+    ReferencePanel = SNew(SBox)
+        .Visibility(EVisibility::Collapsed)
+        [
+            SNew(SBorder)
+                .BorderImage(FCoreStyle::Get().GetBrush("ToolPanel.GroupBorder"))
+                .Padding(8)
+                [
+                    SNew(SVerticalBox)
 
-    // 更新记住密码状态
-    Config.bRememberPassword = bRemember;
+                        + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(0, 0, 0, 4)
+                        [
+                            SNew(SHorizontalBox)
 
-    // 如果不记住密码，清空凭证
-    if (!bRemember)
-    {
-        Config.SecretId.Empty();
-        Config.SecretKey.Empty();
+                                + SHorizontalBox::Slot()
+                                .FillWidth(1.0f)
+                                [
+                                    SAssignNew(ReferenceTitleText, STextBlock)
+                                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 11))
+                                ]
 
-        // 更新UI
-        SecretIdInput->SetText(FText::GetEmpty());
-        SecretKeyInput->SetText(FText::GetEmpty());
-    }
+                                + SHorizontalBox::Slot()
+                                .AutoWidth()
+                                [
+                                    SNew(SButton)
+                                        .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                                        .ToolTipText(LOCTEXT("CopyToPrompt", "复制到提示词输入框"))
+                                        .OnClicked(this, &SAIChatWindow::OnCopyReferenceToPrompt)
+                                        [
+                                            SNew(STextBlock)
+                                                .Text(FText::FromString(TEXT("📋")))
+                                                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+                                        ]
+                                ]
+                        ]
 
-    // 保存配置
-    ConfigManager->UpdateConfig(Config);
+                    + SVerticalBox::Slot()
+                        .AutoHeight()
+                        .Padding(0, 0, 0, 8)
+                        [
+                            SNew(SSeparator)
+                        ]
 
-    AddSystemMessage(bRemember ? TEXT("已启用记住密码") : TEXT("已禁用记住密码"));
+                        + SVerticalBox::Slot()
+                        .FillHeight(1.0f)
+                        [
+                            SNew(SScrollBox)
+                                + SScrollBox::Slot()
+                                [
+                                    SAssignNew(ReferenceContentText, STextBlock)
+                                        .AutoWrapText(true)
+                                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 9))
+                                ]
+                        ]
+                ]
+        ];
 }
 
-void SAIChatWindow::UpdateCredentialsUI()
+TSharedRef<SWidget> SAIChatWindow::BuildMainPanel()
 {
-    auto Config = FHunYuanConfigManager::Get()->GetConfig();
+    return SNew(SScrollBox)
+        + SScrollBox::Slot()
+        .Padding(10)
+        [
+            SNew(SVerticalBox)
 
-    // 根据记住密码状态更新UI提示
-    if (!Config.bRememberPassword && Config.HasValidCredentials())
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildApiConfigSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildImportOptionsSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildModelSelectionSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildFormatSelectionSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildImageInputSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildChatHistorySection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildProgressSection()
+                ]
+
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(5)
+                [
+                    BuildInputSection()
+                ]
+        ];
+}
+
+TSharedRef<SWidget> SAIChatWindow::BuildSidebar()
+{
+    return SNew(SBorder)
+        .BorderImage(FCoreStyle::Get().GetBrush("ToolPanel.DarkGroupBorder"))
+        .Padding(0)
+        [
+            SNew(SVerticalBox)
+
+                // 侧边栏标题栏
+                + SVerticalBox::Slot()
+                .AutoHeight()
+                .Padding(8, 8, 8, 4)
+                [
+                    SNew(SHorizontalBox)
+
+                        + SHorizontalBox::Slot()
+                        .FillWidth(1.0f)
+                        .VAlign(VAlign_Center)
+                        [
+                            SNew(STextBlock)
+                                .Text(LOCTEXT("KnowledgeGraphSidebar", "📚 知识图谱"))
+                                .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+                        ]
+
+                        + SHorizontalBox::Slot()
+                        .AutoWidth()
+                        .VAlign(VAlign_Center)
+                        [
+                            SNew(SButton)
+                                .ButtonStyle(FCoreStyle::Get(), "NoBorder")
+                                .ContentPadding(FMargin(4, 2))
+                                .OnClicked(this, &SAIChatWindow::OnToggleSidebar)
+                                .ToolTipText(LOCTEXT("ToggleSidebar", "折叠侧边栏"))
+                                [
+                                    SNew(STextBlock)
+                                        .Text_Lambda([this]()
+                                            {
+                                                return FText::FromString(bSidebarVisible ? TEXT("▶") : TEXT("◀"));
+                                            })
+                                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+                                ]
+                        ]
+                ]
+
+            // 侧边栏内容
+            + SVerticalBox::Slot()
+                .FillHeight(1.0f)
+                [
+                    SNew(SBox)
+                        .Visibility_Lambda([this]()
+                            {
+                                return bSidebarVisible ? EVisibility::Visible : EVisibility::Collapsed;
+                            })
+                        [
+                            SNew(SVerticalBox)
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(8, 0, 8, 8)
+                                [
+                                    SNew(SSeparator)
+                                        .Orientation(Orient_Horizontal)
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .FillHeight(0.6f)
+                                .Padding(8, 0, 8, 8)
+                                [
+                                    KnowledgeGraphSearch.ToSharedRef()
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(8, 0, 8, 8)
+                                [
+                                    SNew(SSeparator)
+                                        .Orientation(Orient_Horizontal)
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .AutoHeight()
+                                .Padding(8, 0, 8, 4)
+                                [
+                                    SNew(STextBlock)
+                                        .Text(LOCTEXT("ReferenceInfo", "📖 参考信息"))
+                                        .Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+                                        .ColorAndOpacity(FSlateColor::UseSubduedForeground())
+                                ]
+
+                                + SVerticalBox::Slot()
+                                .FillHeight(0.4f)
+                                .Padding(8, 0, 8, 8)
+                                [
+                                    ReferencePanel.ToSharedRef()
+                                ]
+                        ]
+                ]
+        ];
+}
+
+FReply SAIChatWindow::OnToggleSidebar()
+{
+    bSidebarVisible = !bSidebarVisible;
+    return FReply::Handled();
+}
+
+void SAIChatWindow::OnSidebarResized(float NewSize)
+{
+    if (NewSize > 0.01f)
     {
-        // 不记住密码但有保存的凭证，显示提示文本
-        SecretIdInput->SetHintText(FText::Format(
-            LOCTEXT("SecretIdHintWithSaved", "SecretId已保存 (勾选“记住密码”后显示) - {0}..."),
-            FText::FromString(Config.SecretId.Left(8))
-        ));
-
-        SecretKeyInput->SetHintText(LOCTEXT("SecretKeyHintWithSaved", "SecretKey已保存 (勾选“记住密码”后显示)"));
-
-        // 清空输入框
-        SecretIdInput->SetText(FText::GetEmpty());
-        SecretKeyInput->SetText(FText::GetEmpty());
+        CachedSidebarSize = NewSize;
+        if (!bSidebarVisible && NewSize > 0.01f)
+        {
+            bSidebarVisible = true;
+        }
     }
-    else
+    else if (NewSize <= 0.01f)
     {
-        // 正常模式
-        SecretIdInput->SetHintText(LOCTEXT("SecretIdHint", "输入SecretId"));
-        SecretKeyInput->SetHintText(LOCTEXT("SecretKeyHint", "输入SecretKey"));
+        bSidebarVisible = false;
     }
+}
+
+void SAIChatWindow::OnSearchResultSelected(const FSourceDocument& Document)
+{
+    ShowReferencePanel(Document);
+    AddSystemMessage(FString::Printf(TEXT("已加载参考文档: %s，可参考其中信息编写提示词"), *Document.ResourceName));
+}
+
+void SAIChatWindow::ShowReferencePanel(const FSourceDocument& Document)
+{
+    if (!ReferencePanel.IsValid()) return;
+
+    FString Title = FString::Printf(TEXT("%s (%s)"), *Document.ResourceName, *Document.ResourceType);
+    ReferenceTitleText->SetText(FText::FromString(Title));
+
+    FString Content = Document.Content;
+    if (Content.Len() > 500)
+    {
+        Content = Content.Left(500) + TEXT("\n\n... (完整内容可在知识图谱窗口中查看)");
+    }
+    ReferenceContentText->SetText(FText::FromString(Content));
+
+    ReferencePanel->SetVisibility(EVisibility::Visible);
+}
+
+void SAIChatWindow::HideReferencePanel()
+{
+    if (ReferencePanel.IsValid())
+    {
+        ReferencePanel->SetVisibility(EVisibility::Collapsed);
+    }
+}
+
+FReply SAIChatWindow::OnCopyReferenceToPrompt()
+{
+    if (ReferenceContentText.IsValid() && InputTextBox.IsValid())
+    {
+        FString NewPrompt = InputTextBox->GetText().ToString();
+        if (!NewPrompt.IsEmpty())
+        {
+            NewPrompt += TEXT("\n\n");
+        }
+        NewPrompt += TEXT("[参考信息]\n") + ReferenceContentText->GetText().ToString();
+
+        InputTextBox->SetText(FText::FromString(NewPrompt));
+        AddSystemMessage(TEXT("已复制参考信息到提示词输入框，您可以根据需要修改"));
+        FSlateApplication::Get().SetKeyboardFocus(InputTextBox);
+    }
+
+    return FReply::Handled();
+}
+
+void SAIChatWindow::OnConfigChanged()
+{
+    UpdateCredentialsUI();
+}
+
+void SAIChatWindow::UpdateViewImagePreview(EViewType ViewType, UTexture2D* Texture,
+    const FString& Base64Data, const FString& FileName, int64 FileSize)
+{
+    if (!Texture)
+    {
+        UE_LOG(LogTemp, Error, TEXT("UpdateViewImagePreview: 纹理为空"));
+        return;
+    }
+
+    if (!ViewImages.Contains(ViewType))
+    {
+        UE_LOG(LogTemp, Error, TEXT("UpdateViewImagePreview: ViewType不存在"));
+        return;
+    }
+
+    UE_LOG(LogTemp, Log, TEXT("UpdateViewImagePreview: 更新视图 %d, 纹理=%p"), (int32)ViewType, Texture);
+
+    FViewImageItem& Item = ViewImages[ViewType];
+
+    // 创建或更新画笔
+    if (!Item.Brush.IsValid())
+    {
+        Item.Brush = MakeShareable(new FSlateBrush());
+        Item.Brush->DrawAs = ESlateBrushDrawType::Image;
+    }
+
+    // 设置纹理
+    Item.Brush->SetResourceObject(Texture);
+    Item.Brush->ImageSize = FVector2D(Texture->GetSizeX(), Texture->GetSizeY());
+
+    // 更新图像控件
+    if (Item.ImageWidget.IsValid())
+    {
+        Item.ImageWidget->SetImage(Item.Brush.Get());
+    }
+
+    // 更新数据
+    Item.FilePath = FileName;
+    Item.Base64Data = Base64Data;
+    Item.bIsLoaded = true;
+
+    UE_LOG(LogTemp, Log, TEXT("UpdateViewImagePreview: ViewType=%d, Base64长度=%d"),
+        (int32)ViewType, Base64Data.Len());
+
+    // 更新信息文本
+    if (ViewInfoTexts.Contains(ViewType))
+    {
+        FString SizeString = FString::Printf(TEXT("%.1f KB"), FileSize / 1024.0f);
+        ViewInfoTexts[ViewType]->SetText(FText::Format(
+            LOCTEXT("ImageLoaded", "{0}\n{1}"),
+            FText::FromString(FileName),
+            FText::FromString(SizeString)));
+        ViewInfoTexts[ViewType]->SetColorAndOpacity(FLinearColor::Green);
+    }
+
+    if (ViewClearButtons.Contains(ViewType))
+    {
+        ViewClearButtons[ViewType]->SetEnabled(true);
+    }
+}
+
+// 创建纹理
+UTexture2D* FAsyncImageLoadResult::CreateTexture(bool bUseThumbnail) const
+{
+    if (!IsInGameThread())
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateTexture: 必须在游戏线程调用"));
+        return nullptr;
+    }
+
+    // 选择使用原图还是缩略图
+    const TSharedPtr<TArray<uint8>>& DataToUse = bUseThumbnail ? ThumbnailData : RawData;
+    int32 WidthToUse = bUseThumbnail ? ThumbnailWidth : Width;
+    int32 HeightToUse = bUseThumbnail ? ThumbnailHeight : Height;
+
+    if (!DataToUse.IsValid() || DataToUse->Num() == 0)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateTexture: 数据无效"));
+        return nullptr;
+    }
+
+    if (WidthToUse <= 0 || HeightToUse <= 0)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateTexture: 无效尺寸 %dx%d"), WidthToUse, HeightToUse);
+        return nullptr;
+    }
+
+    // 验证数据大小
+    int32 ExpectedSize = WidthToUse * HeightToUse * 4;
+    if (DataToUse->Num() != ExpectedSize)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateTexture: 数据大小不匹配 期望=%d, 实际=%d"),
+            ExpectedSize, DataToUse->Num());
+        return nullptr;
+    }
+
+    // 创建纹理
+    UTexture2D* Texture = UTexture2D::CreateTransient(WidthToUse, HeightToUse, PF_B8G8R8A8);
+    if (!Texture)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateTexture: 创建纹理失败"));
+        return nullptr;
+    }
+
+    // 配置纹理
+    Texture->CompressionSettings = TC_EditorIcon;
+    Texture->SRGB = true;
+    Texture->NeverStream = true;
+
+    // 写入数据
+    FTexturePlatformData* PlatformData = Texture->GetPlatformData();
+    if (PlatformData && PlatformData->Mips.Num() > 0)
+    {
+        FTexture2DMipMap& Mip = PlatformData->Mips[0];
+        void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);
+        if (Data)
+        {
+            FMemory::Memcpy(Data, DataToUse->GetData(), DataToUse->Num());
+            Mip.BulkData.Unlock();
+            Texture->UpdateResource();
+
+            UE_LOG(LogTemp, Log, TEXT("CreateTexture: 创建%s成功: %dx%d, 数据大小=%d"),
+                bUseThumbnail ? TEXT("缩略图") : TEXT("原图"),
+                WidthToUse, HeightToUse, DataToUse->Num());
+
+            return Texture;
+        }
+        Mip.BulkData.Unlock();
+    }
+
+    Texture->ConditionalBeginDestroy();
+    return nullptr;
 }
 
 #undef LOCTEXT_NAMESPACE

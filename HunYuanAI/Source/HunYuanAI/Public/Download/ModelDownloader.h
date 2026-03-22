@@ -7,12 +7,16 @@
 #include "HAL/ThreadSafeBool.h"
 #include "Containers/Queue.h"
 #include "Containers/Map.h"
-#include "Containers/Array.h"
 #include "Templates/SharedPointer.h"
 #include "HAL/CriticalSection.h"
 #include "Async/Async.h"
-#include "DownloadTypes.h"
+#include "Download/DownloadTypes.h"
+#include "Download/IDownloadHandler.h"
 
+/**
+ * 下载器核心类
+ * 负责HTTP下载、进度管理、任务队列
+ */
 class HUNYUANAI_API FModelDownloader : public TSharedFromThis<FModelDownloader>
 {
 public:
@@ -20,7 +24,11 @@ public:
     virtual ~FModelDownloader();
 
     // 添加下载任务
-    bool AddDownload(const FString& URL, const FString& JobId, const FString& DownloadDir,
+    bool AddDownload(
+        const FString& URL,
+        const FString& JobId,
+        const FString& DownloadDir,
+        TSharedPtr<IDownloadHandler> Handler,
         FOnDownloadItemComplete OnComplete);
 
     // 取消下载
@@ -53,9 +61,10 @@ private:
         FString DestinationPath;
         TSharedPtr<Download::FDownloadItem> Item;
         TSharedPtr<IHttpRequest, ESPMode::ThreadSafe> Request;
+        TSharedPtr<IDownloadHandler> Handler;  // 对应的处理器
         FOnDownloadItemComplete Callback;
 
-        // 记录开始时间用于计算速度
+        // 进度计算
         double StartTime = 0.0;
         int64 LastBytes = 0;
         double LastTime = 0.0;

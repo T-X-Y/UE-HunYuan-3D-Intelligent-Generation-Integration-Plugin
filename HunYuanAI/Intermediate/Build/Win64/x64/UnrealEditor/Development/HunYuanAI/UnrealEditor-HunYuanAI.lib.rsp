@@ -1,0 +1,40 @@
+/NOLOGO
+/errorReport:prompt
+/MACHINE:x64
+/SUBSYSTEM:WINDOWS
+/DEF
+/NAME:"UnrealEditor-HunYuanAI.dll"
+/IGNORE:4221
+/NODEFAULTLIB
+"D:/unreal projects/HunYuanTest/Intermediate/Build/Win64/x64/HunYuanTestEditor/Development/UnrealEd/SharedPCH.UnrealEd.Project.ValApi.ValExpApi.Cpp20.h.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/Module.HunYuanAI.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/AssetContextMenuExtension.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanAI.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanAICommands.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanAIStyle.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanAPI.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanAPIImpl.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanConfig.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanConfigManager.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/DownloadHanlderFactory.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/GlbDownloadHandler.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/ModelDownloader.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/ObjZipDownloadHandler.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SingleFileDownloadHandler.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/ZipExtractor.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanError.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanErrorHandler.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanHistoryManager.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/ModerImportManager.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/HunYuanLogging.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/ModelInfoWidget.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SAIChatWindow.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SAIChatWindowMultiView.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SAIChatWindowUI.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SAIChatWindowUpload.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SHistoryWindow.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SKGRagSearchWindow.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/SKnowledgeGraphSearchWidget.cpp.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/applink.c.obj"
+"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/Default.rc2.res"
+/OUT:"D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Intermediate/Build/Win64/x64/UnrealEditor/Development/HunYuanAI/UnrealEditor-HunYuanAI.lib"

@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿// Import/ModelImportManager.h
+#pragma once
 
 #include "CoreMinimal.h"
 #include "UI/ModelInfoWidget.h"
@@ -95,6 +96,14 @@ public:
     FOnModelImported OnModelImported;
     FOnImportCompleted OnImportCompleted;
 
+    // 内部导入实现
+    EModelImportResult ImportModelInternal(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutImportedAssets);
+
+    EModelImportResult ImportModelWithInterchange(const FString& FilePath, const FString& BasePath, TArray<UObject*>& OutImportedAssets);
+
+    // 在内容浏览器中选中资源
+    void SelectInContentBrowser(const TArray<UObject*>& Assets);
+
 private:
     FModelImportManager();
 
@@ -104,21 +113,17 @@ private:
 
     // 修改MTL文件中的纹理路径
     bool UpdateMtlTexturePath(const FString& MtlFilePath, const FString& TextureFileName, const FString& OutputMtlPath);
+    bool ImportMaterialsWithFbxFactory(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutMaterials);
+    bool ImportMeshWithInterchange(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutMeshes);
 
-    // 内部导入实现
-    EModelImportResult ImportModelInternal(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutImportedAssets);
-
-    // 在内容浏览器中选中资源
-    void SelectInContentBrowser(const TArray<UObject*>& Assets);
+    // 备选的FbxFactory导入函数
+    EModelImportResult ImportModelWithFbxFactory(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutImportedAssets);
 
     // 清理包名
     FString SanitizePackageName(const FString& InPackageName);
 
     // 确保目录存在
     bool EnsureDirectoryExists(const FString& PackagePath);
-
-    // 异步导入的工作线程函数
-    void AsyncImportWorker(TArray<FString> FolderPaths, FString DestinationPath);
 
 private:
     static TSharedPtr<FModelImportManager> Instance;

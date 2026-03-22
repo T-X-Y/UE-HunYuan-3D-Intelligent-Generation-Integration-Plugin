@@ -1,0 +1,289 @@
+{
+    "version": "2.1.0",
+    "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0-rtm.5.json",
+    "runs": [
+        {
+            "results": [
+                {
+                    "ruleId": "C4265",
+                    "message": {
+                        "text": "\"TencentCloud::AbstractModel\": 类包含虚函数，但其不常用的析构函数不是虚函数；该类的实例可能无法进行正确析构"
+                    },
+                    "analysisTarget": {
+                        "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/AbstractModel.h"
+                                },
+                                "region": {
+                                    "startLine": 32,
+                                    "startColumn": 10,
+                                    "snippet": {
+                                        "text": "        ~AbstractModel();"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "ruleId": "C4265",
+                    "message": {
+                        "text": "\"FHunYuanRequest\": 类包含虚函数，但其不常用的析构函数不是虚函数；该类的实例可能无法进行正确析构"
+                    },
+                    "analysisTarget": {
+                        "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                                },
+                                "region": {
+                                    "startLine": 28,
+                                    "startColumn": 6,
+                                    "snippet": {
+                                        "text": "    ~FHunYuanRequest() {}"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "ruleId": "C4265",
+                    "message": {
+                        "text": "\"FHunYuanResponse\": 类包含虚函数，但其不常用的析构函数不是虚函数；该类的实例可能无法进行正确析构"
+                    },
+                    "analysisTarget": {
+                        "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                                },
+                                "region": {
+                                    "startLine": 56,
+                                    "startColumn": 6,
+                                    "snippet": {
+                                        "text": "    ~FHunYuanResponse() {}"
+                                    }
+                                }
+                            }
+                        }
+                    ]
+                },
+                {
+                    "ruleId": "C5038",
+                    "message": {
+                        "text": "数据成员“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::m_result”将在 数据成员“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::m_success”后初始化"
+                    },
+                    "analysisTarget": {
+                        "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 19,
+                                    "startColumn": 40,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const R &r) : m_result(r), m_success(true)"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "relatedLocations": [
+                        {
+                            "id": 0,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 19,
+                                    "startColumn": 40,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const R &r) : m_result(r), m_success(true)"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "模板实例化上下文(最早的实例化上下文)为"
+                            }
+                        },
+                        {
+                            "id": 1,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                                },
+                                "region": {
+                                    "startLine": 58,
+                                    "startColumn": 39,
+                                    "snippet": {
+                                        "text": "    TencentCloud::CoreInternalOutcome Deserialize(const std::string& payload)"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "查看对正在编译的 类 模板 实例化“TencentCloud::Outcome<TencentCloud::Core::Error,bool>”的引用"
+                            },
+                            "properties": {
+                                "nestingLevel": 1
+                            }
+                        },
+                        {
+                            "id": 2,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 19,
+                                    "startColumn": 9,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const R &r) : m_result(r), m_success(true)"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "在编译 类 模板 成员函数“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::Outcome(const R &)”时\n        with\n        [\n            R=bool\n        ]"
+                            },
+                            "properties": {
+                                "nestingLevel": 1
+                            }
+                        },
+                        {
+                            "id": 3,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                                },
+                                "region": {
+                                    "startLine": 100,
+                                    "startColumn": 9,
+                                    "snippet": {
+                                        "text": "        return TencentCloud::CoreInternalOutcome(true);"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "请参阅 \"FHunYuanResponse::Deserialize\" 中对 \"TencentCloud::Outcome<TencentCloud::Core::Error,bool>::Outcome\" 的第一个引用"
+                            },
+                            "properties": {
+                                "nestingLevel": 2
+                            }
+                        }
+                    ]
+                },
+                {
+                    "ruleId": "C5038",
+                    "message": {
+                        "text": "数据成员“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::m_error”将在 数据成员“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::m_success”后初始化"
+                    },
+                    "analysisTarget": {
+                        "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                    },
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 16,
+                                    "startColumn": 40,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const E &e) : m_error(e), m_success(false)"
+                                    }
+                                }
+                            }
+                        }
+                    ],
+                    "relatedLocations": [
+                        {
+                            "id": 0,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 16,
+                                    "startColumn": 40,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const E &e) : m_error(e), m_success(false)"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "模板实例化上下文(最早的实例化上下文)为"
+                            }
+                        },
+                        {
+                            "id": 1,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/ThirdParty/tencentcloud-sdk-cpp/include/tencentcloud/core/Outcome.h"
+                                },
+                                "region": {
+                                    "startLine": 16,
+                                    "startColumn": 9,
+                                    "snippet": {
+                                        "text": "        explicit Outcome(const E &e) : m_error(e), m_success(false)"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "在编译 类 模板 成员函数“TencentCloud::Outcome<TencentCloud::Core::Error,bool>::Outcome(const E &)”时\n        with\n        [\n            E=TencentCloud::Core::Error\n        ]"
+                            },
+                            "properties": {
+                                "nestingLevel": 1
+                            }
+                        },
+                        {
+                            "id": 2,
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": "file:///D:/unreal projects/HunYuanTest/Plugins/HunYuanAI/Source/HunYuanAI/Private/API/HunYuanAPIImpl.cpp"
+                                },
+                                "region": {
+                                    "startLine": 66,
+                                    "startColumn": 13,
+                                    "snippet": {
+                                        "text": "            return TencentCloud::CoreInternalOutcome(Core::Error(\"InvalidJson\", \"Failed to parse response JSON\"));"
+                                    }
+                                }
+                            },
+                            "message": {
+                                "text": "请参阅 \"FHunYuanResponse::Deserialize\" 中对 \"TencentCloud::Outcome<TencentCloud::Core::Error,bool>::Outcome\" 的第一个引用"
+                            },
+                            "properties": {
+                                "nestingLevel": 2
+                            }
+                        }
+                    ]
+                }
+            ],
+            "tool": {
+                "driver": {
+                    "name": "MSVC",
+                    "shortDescription": {
+                        "text": "Microsoft Visual C++ Compiler Warnings/Errors"
+                    },
+                    "informationUri": "https://docs.microsoft.com/cpp/error-messages/compiler-errors-1/c-cpp-build-errors"
+                }
+            }
+        }
+    ]
+}

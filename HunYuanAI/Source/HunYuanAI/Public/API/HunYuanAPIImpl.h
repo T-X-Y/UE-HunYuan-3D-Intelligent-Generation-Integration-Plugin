@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿// API/HunYuanAPIImpl.h
+#pragma once
 
 #include "CoreMinimal.h"
 #include "HunYuanAPITypes.h"  // 包含委托定义
@@ -82,18 +83,21 @@ private:
     //状态检查
     void CheckStatus() const;
 
+    
+
 private:
     FThreadSafeBool bRunning;
     FThreadSafeBool bIsValid;
-
-    // 线程安全的队列
-    TQueue<FAPIRequest, EQueueMode::Mpsc> RequestQueue;
-    TQueue<FAPIResponse, EQueueMode::Mpsc> ResponseQueue;
-
-    // 客户端相关
-    FCriticalSection ClientCriticalSection;
+    // 标记是否需要重建客户端
+     bool bNeedsClientRecreation;
+    // 工作线程
+    FRunnableThread* WorkerThread;
     TSharedPtr<TencentCloud::CommonClient> Client;
-
+    // 存储 SDK 对象的成员变量，确保生命周期
+    TSharedPtr<TencentCloud::Credential> CredentialPtr;
+    TSharedPtr<TencentCloud::HttpProfile> HttpProfilePtr;
+    TSharedPtr<TencentCloud::ClientProfile> ClientProfilePtr;
+    
     // 凭证信息
     FString SecretId;
     FString SecretKey;
@@ -101,13 +105,11 @@ private:
     std::string Service = "ai3d";
     std::string Version = "2025-05-13";
 
-    // 工作线程
-    FRunnableThread* WorkerThread;
 
-    // 存储 SDK 对象的成员变量，确保生命周期
-    TSharedPtr<TencentCloud::Credential> CredentialPtr;
-    TSharedPtr<TencentCloud::HttpProfile> HttpProfilePtr;
-    TSharedPtr<TencentCloud::ClientProfile> ClientProfilePtr;
+    // 线程安全的队列
+    TQueue<FAPIRequest, EQueueMode::Mpsc> RequestQueue;
+    TQueue<FAPIResponse, EQueueMode::Mpsc> ResponseQueue;
 
-    
+    // 客户端相关
+    FCriticalSection ClientCriticalSection;
 };

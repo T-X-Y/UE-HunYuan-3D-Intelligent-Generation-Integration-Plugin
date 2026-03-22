@@ -1,20 +1,59 @@
-﻿#include "Import/ModelImportManager.h"
+﻿//Import/ModelImportManager.cpp
+// === 核心模块 ===
+#include "Import/ModelImportManager.h"
+
+// === Asset系统 ===
 #include "AssetToolsModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetImportTask.h"
+#include "EditorFramework/AssetImportData.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/SavePackage.h"
+
+// === Interchange导入系统 ===
+#include "InterchangeManager.h"
+#include "InterchangeAssetImportData.h"
+#include "InterchangePipelineBase.h"
+#include "Nodes/InterchangeBaseNodeContainer.h"
+#include "InterchangeFactoryBase.h"
+#include "InterchangeTranslatorBase.h"
+#include "InterchangeImportModule.h"
+#include "InterchangeStaticMeshFactoryNode.h"
+#include "InterchangeMaterialFactoryNode.h"
+
+// === FBX导入相关 ===
+#include "Factories/Factory.h"
+#include "Factories/FbxFactory.h"
+#include "Factories/FbxImportUI.h"
+#include "Factories/FbxTextureImportData.h"
+#include "Factories/FbxStaticMeshImportData.h"
+#include "Factories/MaterialFactoryNew.h"
+
+// === 引擎基本类型 ===
+#include "Engine/StaticMesh.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialExpressionTextureSample.h"
+#include "Engine/Texture2D.h"
+
+// === 编辑器模块 ===
+#include "Editor.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
-#include "Editor.h"
-#include "HAL/PlatformFileManager.h"
-#include "Misc/FileHelper.h"
-#include "HunYuanAI.h"
-#include "Logging/HunYuanLogging.h"
-#include "HAL/Runnable.h"
-#include "HAL/RunnableThread.h"
-#include "Misc/Paths.h"
-#include "Engine/StaticMesh.h"
+
+// === UI通知 ===
 #include "Framework/Notifications/NotificationManager.h"
 #include "Widgets/Notifications/SNotificationList.h"
-#include "AssetImportTask.h"
+
+// === 文件系统 ===
+#include "HAL/PlatformFileManager.h"
+#include "HAL/Runnable.h"
+#include "HAL/RunnableThread.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+
+// === 项目特定 ===
+#include "HunYuanAI.h"
+#include "Logging/HunYuanLogging.h"
 
 
 TSharedPtr<FModelImportManager> FModelImportManager::Instance = nullptr;
@@ -106,44 +145,50 @@ bool FModelImportManager::PrepareImportFiles(const FModelFileGroup& FileGroup, c
 {
     IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 
+    // 直接使用 DestinationPath 对应的物理路径
     FString ContentPhysicalPath = FPackageName::LongPackageNameToFilename(DestinationPath);
-    FString ModelFolder = ContentPhysicalPath / FileGroup.ModelName;
 
-    if (!PlatformFile.DirectoryExists(*ModelFolder))
+    UE_LOG(LogHunYuanImport, Log, TEXT("准备导入文件到: %s"), *ContentPhysicalPath);
+
+    // 确保文件夹存在
+    if (!PlatformFile.DirectoryExists(*ContentPhysicalPath))
     {
-        if (!PlatformFile.CreateDirectoryTree(*ModelFolder))
+        if (!PlatformFile.CreateDirectoryTree(*ContentPhysicalPath))
         {
-            UE_LOG(LogHunYuanImport, Error, TEXT("无法创建模型文件夹: %s"), *ModelFolder);
+            UE_LOG(LogHunYuanImport, Error, TEXT("无法创建模型文件夹: %s"), *ContentPhysicalPath);
             return false;
         }
     }
 
-    OutObjDestPath = ModelFolder / FPaths::GetCleanFilename(FileGroup.ObjFilePath);
+    // 直接复制文件到目标文件夹，不创建任何子文件夹
+    OutObjDestPath = ContentPhysicalPath / FPaths::GetCleanFilename(FileGroup.ObjFilePath);
     if (!PlatformFile.CopyFile(*OutObjDestPath, *FileGroup.ObjFilePath))
     {
         UE_LOG(LogHunYuanImport, Error, TEXT("无法复制OBJ文件: %s"), *FileGroup.ObjFilePath);
         return false;
     }
 
+    // 复制并处理 MTL 文件
     if (FileGroup.HasMaterial())
     {
-        OutMtlDestPath = ModelFolder / FPaths::GetCleanFilename(FileGroup.MtlFilePath);
+        OutMtlDestPath = ContentPhysicalPath / FPaths::GetCleanFilename(FileGroup.MtlFilePath);
         if (!PlatformFile.CopyFile(*OutMtlDestPath, *FileGroup.MtlFilePath))
         {
             UE_LOG(LogHunYuanImport, Warning, TEXT("无法复制MTL文件: %s"), *FileGroup.MtlFilePath);
         }
     }
 
+    // 复制纹理文件
     if (FileGroup.HasTexture())
     {
-        OutTextureDestPath = ModelFolder / FPaths::GetCleanFilename(FileGroup.TextureFilePath);
+        OutTextureDestPath = ContentPhysicalPath / FPaths::GetCleanFilename(FileGroup.TextureFilePath);
         if (!PlatformFile.CopyFile(*OutTextureDestPath, *FileGroup.TextureFilePath))
         {
             UE_LOG(LogHunYuanImport, Warning, TEXT("无法复制纹理文件: %s"), *FileGroup.TextureFilePath);
         }
     }
 
-    UE_LOG(LogHunYuanImport, Log, TEXT("文件准备完成 - 目标文件夹: %s"), *ModelFolder);
+    UE_LOG(LogHunYuanImport, Log, TEXT("文件准备完成 - 目标文件夹: %s"), *ContentPhysicalPath);
     return true;
 }
 
@@ -151,9 +196,11 @@ bool FModelImportManager::UpdateMtlTexturePath(const FString& MtlFilePath, const
 {
     if (!FPaths::FileExists(MtlFilePath))
     {
+        UE_LOG(LogHunYuanImport, Error, TEXT("MTL文件不存在: %s"), *MtlFilePath);
         return false;
     }
 
+    // 读取 MTL 文件内容
     FString MtlContent;
     if (!FFileHelper::LoadFileToString(MtlContent, *MtlFilePath))
     {
@@ -161,40 +208,76 @@ bool FModelImportManager::UpdateMtlTexturePath(const FString& MtlFilePath, const
         return false;
     }
 
+    UE_LOG(LogHunYuanImport, Verbose, TEXT("原始 MTL 内容:\n%s"), *MtlContent);
+
     TArray<FString> Lines;
     MtlContent.ParseIntoArrayLines(Lines);
 
     bool bModified = false;
-    FString NewMtlContent;
+    TArray<FString> NewLines;
 
-    for (FString Line : Lines)
+    for (const FString& Line : Lines)
     {
-        if (Line.Contains(TEXT("map_")) || Line.Contains(TEXT("bump")) || Line.Contains(TEXT("disp")))
+        FString TrimmedLine = Line.TrimStartAndEnd();
+
+        // 跳过空行
+        if (TrimmedLine.IsEmpty())
         {
-            int32 SpaceIndex;
-            if (Line.FindChar(' ', SpaceIndex))
+            NewLines.Add(Line);
+            continue;
+        }
+
+        // 检查是否是以 map_Kd 开头的纹理行
+        if (TrimmedLine.StartsWith(TEXT("map_Kd"), ESearchCase::IgnoreCase))
+        {
+            // 提取命令和后面的部分
+            int32 SpaceIndex = TrimmedLine.Find(TEXT(" "));
+            if (SpaceIndex != INDEX_NONE)
             {
-                FString Command = Line.Left(SpaceIndex);
-                NewMtlContent += Command + TEXT(" ") + TextureFileName + TEXT("\n");
+                FString Command = TrimmedLine.Left(SpaceIndex);
+                FString OldPath = TrimmedLine.RightChop(SpaceIndex + 1).TrimStart();
+
+                // 获取旧的文件名（仅用于日志）
+                FString OldFileName = FPaths::GetCleanFilename(OldPath);
+
+                UE_LOG(LogHunYuanImport, Log, TEXT("MTL 纹理替换: %s -> %s"), *OldFileName, *TextureFileName);
+
+                // 只替换文件名部分，保持命令不变
+                FString NewLine = Command + TEXT(" ") + TextureFileName;
+                NewLines.Add(NewLine);
                 bModified = true;
             }
             else
             {
-                NewMtlContent += Line + TEXT("\n");
+                // 格式不对，保持原样
+                NewLines.Add(Line);
             }
         }
         else
         {
-            NewMtlContent += Line + TEXT("\n");
+            // 非纹理行，保持原样
+            NewLines.Add(Line);
         }
     }
 
     if (bModified)
     {
-        return FFileHelper::SaveStringToFile(NewMtlContent, *OutputMtlPath);
-    }
+        // 重新组合文件内容
+        FString NewContent = FString::Join(NewLines, TEXT("\n"));
 
-    return true;
+        UE_LOG(LogHunYuanImport, Verbose, TEXT("修改后的 MTL 内容:\n%s"), *NewContent);
+
+        // 保存到输出路径
+        return FFileHelper::SaveStringToFile(NewContent, *OutputMtlPath);
+    }
+    else
+    {
+        UE_LOG(LogHunYuanImport, Log, TEXT("MTL 文件无需修改，直接复制"));
+
+        // 如果没有修改，直接复制原文件
+        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+        return PlatformFile.CopyFile(*OutputMtlPath, *MtlFilePath);
+    }
 }
 
 bool FModelImportManager::ImportModelFromFolder(const FString& FolderPath, const FString& DestinationPath)
@@ -230,7 +313,8 @@ bool FModelImportManager::ImportModelFromFolder(const FString& FolderPath, const
         TargetPath += TEXT("/");
     }
 
-    FString ModelTargetPath = TargetPath + SanitizePackageName(FileGroup.ModelName) + TEXT("/");
+    // 直接使用传入的目标路径，不拼接模型名
+    FString ModelTargetPath = TargetPath;
 
     UE_LOG(LogHunYuanImport, Log, TEXT("目标包路径: %s"), *ModelTargetPath);
 
@@ -249,6 +333,7 @@ bool FModelImportManager::ImportModelFromFolder(const FString& FolderPath, const
         return false;
     }
 
+    // 更新 MTL 纹理路径
     if (FileGroup.HasTexture() && FileGroup.HasMaterial())
     {
         FString TextureFileName = FPaths::GetCleanFilename(FileGroup.TextureFilePath);
@@ -256,7 +341,8 @@ bool FModelImportManager::ImportModelFromFolder(const FString& FolderPath, const
         UE_LOG(LogHunYuanImport, Log, TEXT("已更新MTL纹理路径"));
     }
 
-    FString ImportFilePath = ModelTargetPath + FPaths::GetCleanFilename(FileGroup.ObjFilePath);
+    // 使用复制后的 OBJ 文件路径，而不是未定义的变量
+    FString ImportFilePath = ObjDestPath;
 
     TArray<UObject*> ImportedAssets;
     EModelImportResult Result = ImportModelInternal(ImportFilePath, ModelTargetPath, ImportedAssets);
@@ -271,9 +357,15 @@ bool FModelImportManager::ImportModelFromFolder(const FString& FolderPath, const
         if (ImportedAssets.Num() > 0)
         {
             SelectInContentBrowser(ImportedAssets);
+
+            // ===== 关键：用完立即释放引用 =====
+            // 让引擎自己管理这些资产，我们不保存任何引用
+            ImportedAssets.Empty();
         }
 
-        OnModelImported.Broadcast(true, ModelTargetPath + FileGroup.ModelName);
+        // 构建正确的资产路径用于回调
+        FString AssetPath = ModelTargetPath + SanitizePackageName(FileGroup.ModelName);
+        OnModelImported.Broadcast(true, AssetPath);
     }
     else
     {
@@ -338,7 +430,7 @@ int32 FModelImportManager::ImportModelsFromFolders(const TArray<FString>& Folder
     return SuccessCount;
 }
 
-// 修正后的异步导入函数
+// 异步导入函数
 void FModelImportManager::ImportModelsAsync(const TArray<FString>& FolderPaths, const FString& DestinationPath)
 {
     if (bIsImporting)
@@ -395,6 +487,13 @@ void FModelImportManager::ImportModelsAsync(const TArray<FString>& FolderPaths, 
 // 核心导入函数
 EModelImportResult FModelImportManager::ImportModelInternal(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutImportedAssets)
 {
+    // 确保在游戏线程
+    if (!IsInGameThread())
+    {
+        UE_LOG(LogHunYuanImport, Error, TEXT("ImportModelInternal must be called from game thread only!"));
+        return EModelImportResult::ImportFailed;
+    }
+
     OutImportedAssets.Empty();
 
     if (!GEditor)
@@ -415,7 +514,234 @@ EModelImportResult FModelImportManager::ImportModelInternal(const FString& FileP
         return EModelImportResult::UnsupportedFormat;
     }
 
+    // 判断是OBJ还是其他格式
+    if (Extension == TEXT("obj"))
+    {
+        // OBJ格式：需要特殊处理材质和网格体
+        // 确保目标路径包含模型ID（因为OBJ可能有多个文件）
+        FString ObjDestinationPath = DestinationPath;
+        if (!ObjDestinationPath.EndsWith(TEXT("/")))
+        {
+            ObjDestinationPath += TEXT("/");
+        }
+
+        TArray<UObject*> MaterialAssets;
+        ImportMaterialsWithFbxFactory(FilePath, ObjDestinationPath, MaterialAssets);
+
+        TArray<UObject*> MeshAssets;
+        ImportMeshWithInterchange(FilePath, ObjDestinationPath, MeshAssets);
+
+        // 合并所有资产
+        OutImportedAssets.Append(MaterialAssets);
+        OutImportedAssets.Append(MeshAssets);
+    }
+    else
+    {
+        // GLB/FBX等其他格式：直接使用Interchange完整导入
+        // 注意：DestinationPath 应该是基础路径，如 "/Game/HunyuanImports/"
+        // Interchange会自动在基础路径下创建 [文件名] 文件夹
+        return ImportModelWithInterchange(FilePath, DestinationPath, OutImportedAssets);
+    }
+
+    return EModelImportResult::Success;
+}
+
+// 使用Interchange完整导入（适用于GLB/FBX）
+EModelImportResult FModelImportManager::ImportModelWithInterchange(const FString& FilePath, const FString& BasePath, TArray<UObject*>& OutImportedAssets)
+{
+    UInterchangeManager& InterchangeManager = UInterchangeManager::GetInterchangeManager();
+
+    // 从 FilePath 获取文件名（不含扩展名）
+    FString FileName = FPaths::GetBaseFilename(FilePath);
+
+    // 构建完整路径：基础路径 + 模型名文件夹
+    FString PackageBasePath = FPaths::Combine(BasePath, FileName);
+    PackageBasePath = PackageBasePath / TEXT("");  // 确保以斜杠结尾
+
+    UE_LOG(LogHunYuanImport, Log, TEXT("Interchange完整导入到路径: %s"), *PackageBasePath);
+
+    // 创建SourceData
+    UInterchangeSourceData* SourceData = InterchangeManager.CreateSourceData(FilePath);
+    if (!SourceData)
+    {
+        UE_LOG(LogHunYuanImport, Error, TEXT("无法创建SourceData: %s"), *FilePath);
+        return EModelImportResult::ImportFailed;
+    }
+
+    // 创建导入参数
+    FImportAssetParameters ImportParams;
+    ImportParams.bIsAutomated = true;
+
+    // 执行导入 - 使用基础路径，Interchange会自动创建子文件夹
+    TArray<UObject*> ImportedAssets;
+    bool bSuccess = InterchangeManager.ImportAsset(
+        PackageBasePath,        // 基础路径，如 "/Game/HunyuanImports/"
+        SourceData,
+        ImportParams,
+        ImportedAssets
+    );
+
+    if (bSuccess)
+    {
+        OutImportedAssets.Append(ImportedAssets);
+
+        // 记录导入的资产
+        for (UObject* Asset : ImportedAssets)
+        {
+            UE_LOG(LogHunYuanImport, Log, TEXT("Interchange导入资产: %s (%s)"),
+                *Asset->GetName(), *Asset->GetClass()->GetName());
+        }
+
+        return EModelImportResult::Success;
+    }
+
+    return EModelImportResult::ImportFailed;
+}
+
+bool FModelImportManager::ImportMaterialsWithFbxFactory(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutMaterials)
+{
     FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+
+    // ===== 确保使用正确的路径 =====
+    FString TargetPath = DestinationPath;
+    if (TargetPath.EndsWith(TEXT("/")))
+    {
+        TargetPath = TargetPath.LeftChop(1);
+    }
+
+    UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
+    FbxFactory->AddToRoot();
+
+    UFbxImportUI* ImportUI = NewObject<UFbxImportUI>();
+    ImportUI->bIsObjImport = (FPaths::GetExtension(FilePath).ToLower() == TEXT("obj"));
+    ImportUI->bImportMaterials = true;      // 只导入材质
+    ImportUI->bImportTextures = true;       // 导入纹理
+    ImportUI->bImportAsSkeletal = false;    // 不导入骨骼
+    ImportUI->bCreatePhysicsAsset = false;
+    ImportUI->bImportAnimations = false;
+    ImportUI->bImportMesh = false;          // 不导入网格体！
+
+    // 材质搜索设置
+    ImportUI->TextureImportData = NewObject<UFbxTextureImportData>();
+    ImportUI->TextureImportData->MaterialSearchLocation = EMaterialSearchLocation::Local;
+
+    FbxFactory->ImportUI = ImportUI;
+
+    UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
+    ImportTask->Filename = FilePath;
+    ImportTask->DestinationPath = TargetPath;
+    ImportTask->bAutomated = true;
+    ImportTask->bReplaceExisting = true;
+    ImportTask->bSave = true;
+    ImportTask->bAsync = false;
+    ImportTask->Factory = FbxFactory;
+
+    TArray<UAssetImportTask*> ImportTasks;
+    ImportTasks.Add(ImportTask);
+
+    AssetToolsModule.Get().ImportAssetTasks(ImportTasks);
+    FbxFactory->RemoveFromRoot();
+
+    // 收集材质资产
+    for (const FString& ObjectPath : ImportTask->ImportedObjectPaths)
+    {
+        FSoftObjectPath SoftPath(ObjectPath);
+        UObject* Asset = SoftPath.TryLoad();
+        if (Asset && (Asset->IsA<UMaterialInterface>() || Asset->IsA<UTexture>()))
+        {
+            OutMaterials.Add(Asset);
+        }
+    }
+
+    return OutMaterials.Num() > 0;
+}
+
+bool FModelImportManager::ImportMeshWithInterchange(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutMeshes)
+{
+    // 获取Interchange管理器
+    UInterchangeManager& InterchangeManager = UInterchangeManager::GetInterchangeManager();
+
+    // ===== 修复：使用 DestinationPath 直接作为包路径，不再拼接文件名 =====
+    // 因为 DestinationPath 已经是 /Game/HunyuanImports/模型ID/ 这样的路径
+    FString PackagePath = DestinationPath;
+
+    // 移除末尾的斜杠（如果有）
+    if (PackagePath.EndsWith(TEXT("/")))
+    {
+        PackagePath = PackagePath.LeftChop(1);
+    }
+
+    UE_LOG(LogHunYuanImport, Log, TEXT("Interchange导入网格体到路径: %s"), *PackagePath);
+
+    // 创建SourceData
+    UInterchangeSourceData* SourceData = InterchangeManager.CreateSourceData(FilePath);
+    if (!SourceData)
+    {
+        UE_LOG(LogHunYuanImport, Error, TEXT("无法创建SourceData: %s"), *FilePath);
+        return false;
+    }
+
+    // 创建导入参数
+    FImportAssetParameters ImportParams;
+    ImportParams.bIsAutomated = true;
+
+    // 执行导入
+    TArray<UObject*> ImportedAssets;
+
+    bool bSuccess = InterchangeManager.ImportAsset(
+        PackagePath,           // 直接使用 DestinationPath，不再拼接文件名
+        SourceData,            // SourceData
+        ImportParams,          // ImportAssetParameters
+        ImportedAssets         // OutImportedObjects
+    );
+
+    if (bSuccess)
+    {
+        // 只收集静态网格体
+        for (UObject* Asset : ImportedAssets)
+        {
+            if (UStaticMesh* Mesh = Cast<UStaticMesh>(Asset))
+            {
+                OutMeshes.Add(Mesh);
+                UE_LOG(LogHunYuanImport, Log, TEXT("Interchange导入网格体: %s"), *Mesh->GetName());
+            }
+        }
+    }
+
+    return OutMeshes.Num() > 0;
+}
+
+EModelImportResult FModelImportManager::ImportModelWithFbxFactory(const FString& FilePath, const FString& DestinationPath, TArray<UObject*>& OutImportedAssets)
+{
+    FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+
+    // 创建FbxFactory
+    UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
+    FbxFactory->AddToRoot();
+
+    // 配置导入选项
+    UFbxImportUI* ImportUI = NewObject<UFbxImportUI>();
+    bool bIsObj = (FPaths::GetExtension(FilePath).ToLower() == TEXT("obj"));
+    ImportUI->bIsObjImport = bIsObj;
+    ImportUI->bImportMaterials = true;
+    ImportUI->bImportTextures = true;
+    ImportUI->bCreatePhysicsAsset = false;
+    ImportUI->bAutoComputeLodDistances = false;
+    ImportUI->bImportAnimations = false;
+
+    // 材质搜索设置
+    ImportUI->TextureImportData = NewObject<UFbxTextureImportData>();
+    ImportUI->TextureImportData->MaterialSearchLocation = EMaterialSearchLocation::Local;
+
+    // 静态网格体设置
+    ImportUI->StaticMeshImportData = NewObject<UFbxStaticMeshImportData>();
+    ImportUI->StaticMeshImportData->NormalImportMethod = EFBXNormalImportMethod::FBXNIM_ComputeNormals;
+    ImportUI->StaticMeshImportData->NormalGenerationMethod = EFBXNormalGenerationMethod::MikkTSpace;
+    ImportUI->StaticMeshImportData->bGenerateLightmapUVs = true;
+    ImportUI->StaticMeshImportData->bAutoGenerateCollision = true;
+    ImportUI->StaticMeshImportData->bRemoveDegenerates = true;
+
+    FbxFactory->ImportUI = ImportUI;
 
     UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
     ImportTask->Filename = FilePath;
@@ -423,35 +749,32 @@ EModelImportResult FModelImportManager::ImportModelInternal(const FString& FileP
     ImportTask->bAutomated = true;
     ImportTask->bReplaceExisting = true;
     ImportTask->bSave = true;
-    ImportTask->Factory = nullptr;
-
-    UE_LOG(LogHunYuanImport, Log, TEXT("开始导入 - 文件: %s, 目标: %s"),
-        *FPaths::GetCleanFilename(FilePath), *DestinationPath);
+    ImportTask->bAsync = false;
+    ImportTask->Factory = FbxFactory;
 
     TArray<UAssetImportTask*> ImportTasks;
     ImportTasks.Add(ImportTask);
+
     AssetToolsModule.Get().ImportAssetTasks(ImportTasks);
+
+    FbxFactory->RemoveFromRoot();
 
     if (ImportTask->ImportedObjectPaths.Num() > 0)
     {
-        FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-
         for (const FString& ObjectPath : ImportTask->ImportedObjectPaths)
         {
             FSoftObjectPath SoftPath(ObjectPath);
             UObject* Asset = SoftPath.TryLoad();
-
             if (Asset)
             {
                 OutImportedAssets.Add(Asset);
-                UE_LOG(LogHunYuanImport, Log, TEXT("导入成功: %s"), *Asset->GetName());
+                UE_LOG(LogHunYuanImport, Log, TEXT("FbxFactory导入成功: %s (%s)"),
+                    *Asset->GetName(), *Asset->GetClass()->GetName());
             }
         }
-
         return EModelImportResult::Success;
     }
 
-    UE_LOG(LogHunYuanImport, Error, TEXT("导入任务失败: %s"), *FilePath);
     return EModelImportResult::ImportFailed;
 }
 
