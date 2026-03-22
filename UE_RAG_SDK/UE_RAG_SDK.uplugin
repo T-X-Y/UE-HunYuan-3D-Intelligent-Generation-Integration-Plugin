@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "UE_RAG_SDK",
+	"Description": "rag sdk",
+	"Category": "Other",
+	"CreatedBy": "TXY",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "UE_RAG_SDK",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}
